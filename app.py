@@ -125,7 +125,30 @@ def free_port(start: int = 8765) -> int:
     raise RuntimeError("사용 가능한 포트를 찾지 못했습니다.")
 
 
+def self_check() -> int:
+    """배포용 실행 파일이 제대로 묶였는지 확인한다 (CI에서 사용)."""
+    import subprocess
+
+    from PIL import Image
+
+    client = app.test_client()
+    assert client.get("/").status_code == 200, "화면을 불러오지 못함"
+    ffmpeg = converters.find_ffmpeg()
+    assert ffmpeg, "ffmpeg 없음"
+    subprocess.run([ffmpeg, "-version"], check=True, capture_output=True)
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        Image.new("RGB", (32, 32), "red").save(tmp / "a.png")
+        [pdf] = converters.convert(tmp / "a.png", tmp, "pdf")
+        [png] = converters.convert(pdf, tmp / "p", "png")
+        import pillow_heif, pdf2docx  # noqa: F401  묶였는지만 확인
+    print("self-check OK")
+    return 0
+
+
 def main() -> None:
+    if "--self-check" in sys.argv:
+        sys.exit(self_check())
     port = free_port()
     url = f"http://127.0.0.1:{port}"
     print(f"\n  파일 변환기가 실행되었습니다 → {url}")
@@ -136,4 +159,7 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    import multiprocessing
+
+    multiprocessing.freeze_support()
     main()

@@ -255,10 +255,10 @@ def convert_pdf(src: Path, out_dir: Path, target: str) -> list[Path]:
             raise ConversionError(f"PDF를 Word로 바꾸지 못했습니다. ({e})")
         return [out]
 
-    import fitz  # PyMuPDF
+    import pymupdf
 
     try:
-        doc = fitz.open(src)
+        doc = pymupdf.open(src)
     except Exception:
         raise ConversionError("PDF를 열 수 없습니다. 손상되었거나 암호가 걸린 파일일 수 있습니다.")
     with doc:

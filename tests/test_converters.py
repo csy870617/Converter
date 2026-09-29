@@ -56,8 +56,8 @@ def test_image(png, tmp_path, target):
 
 def test_images_merge_into_one_pdf(png, tmp_path):
     [pdf] = converters.images_to_single_pdf([png, png], tmp_path, "합본")
-    import fitz
-    with fitz.open(pdf) as doc:
+    import pymupdf
+    with pymupdf.open(pdf) as doc:
         assert len(doc) == 2
 
 
