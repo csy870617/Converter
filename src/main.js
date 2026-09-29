@@ -226,6 +226,26 @@ async function run() {
   setMsg(text, errors.length ? 'err' : 'ok', link);
 }
 
+// 라이트/다크 모드 전환 (처음에는 기기 설정을 따르고, 고르면 기억한다)
+const darkQuery = window.matchMedia('(prefers-color-scheme: dark)');
+function currentTheme() {
+  return document.documentElement.dataset.theme || (darkQuery.matches ? 'dark' : 'light');
+}
+function showTheme() {
+  for (const b of document.querySelectorAll('[data-theme-choice]')) {
+    b.setAttribute('aria-pressed', String(b.dataset.themeChoice === currentTheme()));
+  }
+}
+for (const b of document.querySelectorAll('[data-theme-choice]')) {
+  b.onclick = () => {
+    document.documentElement.dataset.theme = b.dataset.themeChoice;
+    try { localStorage.setItem('theme', b.dataset.themeChoice); } catch { /* 저장 불가해도 동작 */ }
+    showTheme();
+  };
+}
+darkQuery.addEventListener('change', showTheme);
+showTheme();
+
 // 지원 형식 표
 $('formats').replaceChildren(...CATEGORIES.map((c) => {
   const tr = document.createElement('tr');
