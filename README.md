@@ -1,60 +1,55 @@
 # 간단 파일 변환기
 
 MP4 → MP3, Word → PDF, 아이폰 사진(HEIC) → JPG처럼 자주 쓰는 파일 변환을
-**끌어다 놓고 → 형식 누르고 → 변환하기** 세 단계로 끝내는 프로그램입니다.
+**끌어다 놓고 → 형식 누르고 → 변환하기** 세 단계로 끝내는 웹사이트입니다.
 
-- 인터넷 사이트에 파일을 올리지 않습니다. 모든 변환은 **내 컴퓨터 안에서** 이루어집니다.
+- 설치할 것이 없습니다. 주소만 열면 바로 사용합니다.
+- 파일은 서버로 올라가지 않습니다. 모든 변환은 **사용자의 브라우저 안에서** 이루어집니다.
 - 여러 파일을 한 번에 변환할 수 있고, 결과가 여러 개면 ZIP 하나로 받습니다.
-- 사진 여러 장을 **PDF 한 개로 합치기**도 됩니다.
+- 사진 여러 장을 PDF 한 개로 합칠 수 있습니다.
 
 ## 지원 형식
 
 | 종류 | 이런 파일을 | 이렇게 바꿀 수 있어요 |
 |---|---|---|
-| 동영상 | MP4, MOV, AVI, MKV, WEBM, WMV … | **MP3**, WAV, M4A, FLAC, OGG, MP4, WEBM, GIF |
+| 동영상 | MP4, MOV, AVI, MKV, WEBM, WMV … | **MP3**, WAV, M4A, MP4, GIF |
 | 오디오 | MP3, WAV, M4A, AAC, FLAC, OGG, WMA … | MP3, WAV, M4A, FLAC, OGG |
-| 이미지 | JPG, PNG, WEBP, **HEIC**, BMP, GIF, TIFF | JPG, PNG, WEBP, **PDF**, ICO |
+| 이미지 | JPG, PNG, WEBP, **HEIC**, AVIF, BMP, GIF, TIFF | JPG, PNG, WEBP, **PDF**, ICO |
 | Word 문서 | DOC, DOCX, ODT, RTF, TXT | **PDF**, DOCX |
 | 프레젠테이션 | PPT, PPTX, ODP | **PDF**, PPTX |
 | 스프레드시트 | XLS, XLSX, ODS, CSV | **PDF**, XLSX, CSV |
 | PDF | PDF | **DOCX(Word)**, JPG, PNG, TXT |
 
-## 설치 및 실행
+알아 두면 좋은 점:
+- 문서(Word·PPT·Excel) 변환은 처음 한 번 변환 엔진(약 90MB)을 내려받느라 1~2분 걸립니다. 다음부터는 브라우저에 저장되어 빠릅니다.
+- 동영상은 컴퓨터 성능으로 변환하므로 긴 영상의 MP4 변환은 오래 걸릴 수 있고, 1GB가 넘는 파일은 실패할 수 있습니다. MP3 추출은 빠릅니다.
+- 한글 문서는 나눔고딕·나눔명조 글꼴로 변환됩니다. 원본 글꼴과 모양이 조금 다를 수 있습니다.
+- 크롬 또는 엣지 최신 버전을 권장합니다.
 
-### 1. 준비물 (한 번만)
+## 배포 (GitHub Pages)
 
-1. **Python** — <https://www.python.org/downloads/>
-   (Windows는 설치 첫 화면에서 **"Add python.exe to PATH"를 꼭 체크**하세요.)
-2. **LibreOffice** (무료) — <https://www.libreoffice.org/download/download/>
-   Word·Excel·PowerPoint 문서를 변환할 때만 필요합니다. 동영상·오디오·이미지·PDF 변환은 없어도 됩니다.
+`.github/workflows/deploy.yml`이 코드가 올라올 때마다 자동으로 빌드·테스트한 뒤 GitHub Pages에 배포합니다.
 
-### 2. 실행
+처음 한 번만 설정이 필요합니다:
+1. GitHub 저장소 → **Settings → Pages**
+2. **Build and deployment → Source**를 **GitHub Actions**로 선택
+3. **Actions** 탭에서 "GitHub Pages 배포"를 실행하거나(Run workflow) 코드를 올리면 배포됩니다.
 
-이 폴더를 내려받은 뒤(GitHub의 **Code → Download ZIP** 후 압축 풀기):
+배포가 끝나면 `https://<사용자이름>.github.io/<저장소이름>/` 주소로 접속할 수 있습니다.
 
-- **Windows**: `start.bat` 더블클릭
-- **Mac**: `start.command` 더블클릭
-  (처음에 "확인되지 않은 개발자" 경고가 나오면 파일을 **우클릭 → 열기**)
-- **Linux**: 터미널에서 `./start.command`
-
-처음 실행할 때만 필요한 부품을 자동으로 설치하느라 몇 분 걸립니다.
-준비가 끝나면 브라우저에 변환기 화면이 자동으로 열립니다.
-검은 창(터미널)을 닫으면 프로그램이 종료됩니다.
-
-## 명령줄로 쓰기 (선택)
+## 개발
 
 ```bash
-.venv/bin/python converters.py mp3 강의.mp4
-.venv/bin/python converters.py pdf 보고서.docx 발표.pptx -o 결과폴더
+npm install
+npm run dev        # 개발 서버
+npm run build      # dist/ 에 배포용 파일 생성
+npm test           # 실제 브라우저로 모든 변환을 시험 (build 후 실행)
 ```
 
-## 개발자용
-
-```bash
-python -m venv .venv && .venv/bin/pip install -r requirements.txt pytest
-.venv/bin/python -m pytest tests
-```
-
-- `converters.py` — 변환 엔진 (ffmpeg / LibreOffice / Pillow / PyMuPDF / pdf2docx)
-- `app.py` — 로컬 웹 서버 (127.0.0.1 에서만 열림)
-- `templates/index.html` — 화면
+구성:
+- `src/main.js`: 화면
+- `src/engines.js`: 변환 엔진 ([ffmpeg.wasm](https://github.com/ffmpegwasm/ffmpeg.wasm), [LibreOffice WASM](https://github.com/matbeedotcom/libreoffice-document-converter), [PDF.js](https://mozilla.github.io/pdf.js/), [pdf-lib](https://pdf-lib.js.org/), [heic-to](https://github.com/hoppergee/heic-to))
+- `src/formats.js`: 지원 형식 목록
+- `public/sw.js`: 서비스 워커. GitHub Pages에서 할 수 없는 보안 헤더 설정과 압축된 엔진 파일 풀기를 대신 합니다.
+- `scripts/prepare-assets.mjs`: 큰 엔진 파일을 압축해 `public/`에 준비합니다 (GitHub Pages 파일당 100MB 제한 대응).
+- `public/fonts/`: 나눔글꼴 ([SIL Open Font License](public/fonts/OFL.txt))

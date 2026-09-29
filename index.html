@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="MP4→MP3, Word→PDF, 사진→JPG 등 자주 쓰는 파일 변환. 파일이 서버로 전송되지 않습니다.">
+<title>간단 파일 변환기</title>
+<link rel="icon" href="favicon.png">
+</head>
+<body>
+<main>
+  <h1>간단 파일 변환기</h1>
+  <p class="sub">MP4 → MP3, Word → PDF, 사진 → JPG 등. 파일은 서버로 보내지지 않고 <b>내 브라우저 안에서만</b> 변환됩니다.</p>
+
+  <section class="card">
+    <p class="step"><span>1</span>파일 선택</p>
+    <div id="drop" tabindex="0" role="button" aria-label="파일 선택">
+      <div class="big">여기에 파일을 끌어다 놓으세요</div>
+      <div class="small">또는 눌러서 선택 · 여러 개도 한 번에 가능</div>
+    </div>
+    <input id="picker" type="file" multiple hidden>
+    <ul id="files"></ul>
+  </section>
+
+  <section class="card">
+    <p class="step"><span>2</span>바꿀 형식 선택</p>
+    <div id="targets"></div>
+    <p id="targetHint" class="hint">먼저 파일을 선택하면 바꿀 수 있는 형식이 나타납니다.</p>
+    <label class="merge hidden" id="mergeRow"><input type="checkbox" id="merge" checked> 사진들을 PDF 한 개로 합치기</label>
+    <p class="note hidden" id="officeNote">문서 변환은 처음 한 번 변환 엔진(약 90MB)을 내려받느라 1~2분 걸릴 수 있습니다. 다음부터는 빠릅니다.</p>
+  </section>
+
+  <section class="card">
+    <button id="go" disabled>변환하기</button>
+    <div class="bar" id="bar"><div></div></div>
+    <div id="msg" aria-live="polite"></div>
+  </section>
+
+  <details class="card">
+    <summary>지원하는 형식 보기</summary>
+    <table id="formats"></table>
+    <p class="hint">큰 동영상(1GB 이상)은 브라우저 메모리 한계로 실패할 수 있습니다. 동영상 → MP4 변환은 컴퓨터 성능에 따라 오래 걸릴 수 있습니다.</p>
+  </details>
+</main>
+<script type="module" src="/src/main.js"></script>
+</body>
+</html>
