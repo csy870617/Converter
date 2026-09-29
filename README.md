@@ -31,11 +31,11 @@ MP4 → MP3, Word → PDF, 아이폰 사진(HEIC) → JPG처럼 자주 쓰는 �
 `.github/workflows/deploy.yml`이 코드가 올라올 때마다 자동으로 빌드·테스트한 뒤 GitHub Pages에 배포합니다.
 
 처음 한 번만 설정이 필요합니다:
-1. GitHub 저장소 → **Settings → Pages**
-2. **Build and deployment → Source**를 **GitHub Actions**로 선택
-3. **Actions** 탭에서 "GitHub Pages 배포"를 실행하거나(Run workflow) 코드를 올리면 배포됩니다.
+1. GitHub 저장소 → **Settings → General → Default branch**를 `main`으로 변경
+2. **Settings → Pages → Build and deployment → Source**를 **GitHub Actions**로 선택
+3. **Actions** 탭에서 "GitHub Pages 배포" → **Run workflow** (이후에는 `main`에 올릴 때마다 자동 배포)
 
-배포가 끝나면 `https://<사용자이름>.github.io/<저장소이름>/` 주소로 접속할 수 있습니다.
+배포가 끝나면 <https://csy870617.github.io/Converter/> 에서 사용할 수 있습니다.
 
 ## 개발
 

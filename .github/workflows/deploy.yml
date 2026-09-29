@@ -3,7 +3,7 @@ name: GitHub Pages 배포
 
 on:
   push:
-    branches: [main, master, claude/stoic-bell-u5qt8w]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
