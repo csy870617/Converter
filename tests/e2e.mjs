@@ -46,7 +46,20 @@ const MAGIC = {
   csv: (b) => /철수/.test(b.toString('utf8')),
 };
 
-// [입력 파일들, 변환 형식, 예상 결과 파일 이름, 옵션]
+// 이미지 가로 크기 (AI 화질 개선 결과가 실제로 커졌는지 확인)
+function imageWidth(b) {
+  if (MAGIC.png(b)) return b.readUInt32BE(16);
+  for (let i = 2; i < b.length - 9;) { // JPEG: SOF 표식을 찾는다
+    const marker = b[i + 1];
+    if (marker >= 0xc0 && marker <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(marker)) return b.readUInt16BE(i + 7);
+    i += 2 + b.readUInt16BE(i + 2);
+  }
+  return 0;
+}
+
+const LABEL = { up2: '고화질 2배', up4: '고화질 4배' };
+
+// [입력 파일들, 변환 형식, 예상 결과 파일 이름, 예상 가로 크기]
 const CASES = [
   [['영상.mp4'], 'mp3', '영상.mp3'],
   [['영상.mp4'], 'wav', '영상.wav'],
@@ -88,6 +101,9 @@ const CASES = [
   [['두쪽.pdf'], 'docx', '두쪽.docx'],
   [['두쪽.pdf'], 'jpg', '변환결과.zip'],
   [['스캔.pdf'], 'docx', '스캔.docx'],
+  [['사진.jpg'], 'up2', '사진_고화질2배.jpg', 1600],
+  [['투명.png'], 'up4', '투명_고화질4배.png'],
+  [['작은영상.mp4'], 'up4', '작은영상_고화질4배.mp4'], // 장면 60개: 여러 묶음으로 나눠 처리하는 경로까지 확인
 ];
 
 const only = process.argv[2] ? new RegExp(process.argv[2]) : null;
@@ -104,8 +120,8 @@ await page.goto(url);
 await page.waitForFunction(() => self.crossOriginIsolated, null, { timeout: 30000 });
 
 let failed = 0;
-for (const [inputs, target, expected] of CASES) {
-  const label = `${inputs.join(' + ')} → ${target.toUpperCase()}`;
+for (const [inputs, target, expected, width] of CASES) {
+  const label = `${inputs.join(' + ')} → ${LABEL[target] || target.toUpperCase()}`;
   if (only && !only.test(label)) continue;
   const started = Date.now();
   try {
@@ -113,21 +129,21 @@ for (const [inputs, target, expected] of CASES) {
     await page.setInputFiles('#picker', inputs.map((name) => ({
       name, mimeType: 'application/octet-stream', buffer: fs.readFileSync(path.join(fixtures, name)),
     })));
-    await page.getByRole('button', { name: target.toUpperCase(), exact: true }).click();
+    await page.getByRole('button', LABEL[target] ? { name: LABEL[target] } : { name: target.toUpperCase(), exact: true }).click();
     if (expected === null) {
       await page.click('#go');
-      await page.waitForSelector('#msg.err', { timeout: 240000 });
+      await page.waitForSelector('#msg.err', { timeout: 600000 });
       const msg = await page.textContent('#msg');
       if (/알 수 없는 오류/.test(msg)) throw new Error(`안내 문구가 불친절함: ${msg}`);
       console.log(`✔ ${label}  → 오류 안내: ${msg.split('\n')[0]}`);
       continue;
     }
-    const downloading = page.waitForEvent('download', { timeout: 240000 });
+    const downloading = page.waitForEvent('download', { timeout: 600000 });
     await page.click('#go');
     // 오류 메시지가 뜨면 기다리지 않고 바로 실패 처리
     const download = await Promise.race([
       downloading,
-      page.waitForSelector('#msg.err', { timeout: 240000 }).then(async () => { throw new Error(await page.textContent('#msg')); }),
+      page.waitForSelector('#msg.err', { timeout: 600000 }).then(async () => { throw new Error(await page.textContent('#msg')); }),
     ]);
     const name = download.suggestedFilename();
     const file = path.join(outDir, name);
@@ -136,6 +152,7 @@ for (const [inputs, target, expected] of CASES) {
     const ext = name.split('.').pop();
     if (name !== expected) throw new Error(`파일 이름이 ${name} (기대: ${expected})`);
     if (!buf.length || !MAGIC[ext]?.(buf)) throw new Error(`${name} 내용이 올바르지 않음`);
+    if (width && imageWidth(buf) !== width) throw new Error(`${name} 가로 크기가 ${imageWidth(buf)} (기대: ${width})`);
     const msg = await page.textContent('#msg');
     if (!msg.startsWith('완료')) throw new Error(`메시지: ${msg}`);
     console.log(`✔ ${label}  (${((Date.now() - started) / 1000).toFixed(1)}s, ${buf.length} bytes)`);

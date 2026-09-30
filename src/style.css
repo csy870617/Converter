@@ -70,6 +70,8 @@ h1 { font-size: 26px; margin: 0; }
   border: 1px solid var(--line); background: var(--card); color: var(--text); border-radius: 10px;
   padding: 10px 18px; font-size: 16px; font-weight: 600; cursor: pointer; min-width: 80px;
 }
+.fmt.ai { min-width: 110px; }
+.fmt.ai::before { content: "✦ "; }
 .fmt:hover { border-color: var(--accent); }
 .fmt.on { background: var(--accent); border-color: var(--accent); color: #fff; }
 .hint { color: var(--muted); font-size: 14px; margin: 0; }

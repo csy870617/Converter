@@ -1,5 +1,5 @@
 import './style.css';
-import { CATEGORIES, ConvertError, MIME, categoryOf, extOf, targetsFor } from './formats.js';
+import { CATEGORIES, ConvertError, MIME, UPSCALE, categoryOf, extOf, targetLabel, targetsFor } from './formats.js';
 import { convertFile, imagesToPdf, officeSupported } from './engines.js';
 
 // ---------------------------------------------------------------------------
@@ -101,7 +101,8 @@ function render() {
   for (const t of common) {
     const b = document.createElement('button');
     b.className = `fmt${t === state.target ? ' on' : ''}`;
-    b.textContent = t.toUpperCase();
+    b.textContent = targetLabel(t);
+    if (UPSCALE[t]) b.classList.add('ai');
     b.disabled = state.busy;
     b.onclick = () => { state.target = t; render(); };
     box.append(b);
@@ -118,10 +119,17 @@ function render() {
   $('mergeRow').classList.toggle('hidden', !(allImages && state.target === 'pdf'));
   const needsOffice = usable.some((f) => categoryOf(f.name).engine === 'office');
   $('officeNote').classList.toggle('hidden', !needsOffice);
+  const upscaling = !!UPSCALE[state.target];
+  $('upNote').classList.toggle('hidden', !upscaling);
+  $('upVideoNote').classList.toggle('hidden', !(upscaling && usable.some((f) => categoryOf(f.name).id === 'video')));
 
   const go = $('go');
   go.disabled = state.busy || !(usable.length && state.target);
-  if (!state.busy) go.textContent = state.target ? `${state.target.toUpperCase()}(으)로 변환하기` : '변환하기';
+  if (!state.busy) {
+    if (!state.target) go.textContent = '변환하기';
+    else if (UPSCALE[state.target]) go.textContent = `${targetLabel(state.target)}로 화질 높이기`;
+    else go.textContent = `${state.target.toUpperCase()}(으)로 변환하기`;
+  }
 }
 
 function setMsg(text, kind = '', link = null) {
@@ -253,7 +261,7 @@ $('formats').replaceChildren(...CATEGORIES.map((c) => {
   name.textContent = c.name;
   const desc = document.createElement('td');
   const to = document.createElement('b');
-  to.textContent = c.targets.join(', ').toUpperCase();
+  to.textContent = c.targets.map(targetLabel).join(', ');
   desc.append(`${c.exts.join(', ').toUpperCase()} → `, to);
   tr.append(name, desc);
   return tr;

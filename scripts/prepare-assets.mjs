@@ -1,4 +1,4 @@
-// 큰 WebAssembly 파일(LibreOffice, ffmpeg)을 public/ 아래로 복사한다.
+// 큰 WebAssembly 파일(LibreOffice, ffmpeg, ONNX Runtime)을 public/ 아래로 복사한다.
 // GitHub Pages의 파일 크기 제한(100MB)을 피하고 내려받는 양을 줄이기 위해
 // 큰 파일은 gzip으로 압축해 두고, 브라우저의 서비스 워커(public/sw.js)가 풀어서 쓴다.
 import fs from 'node:fs';
@@ -19,6 +19,10 @@ const assets = [
   [nm('@matbee/libreoffice-converter/dist/browser.worker.global.js'), pub('lo/browser.worker.js')],
   [nm('@ffmpeg/core/dist/esm/ffmpeg-core.js'), pub('ffmpeg/ffmpeg-core.js')],
   [nm('@ffmpeg/core/dist/esm/ffmpeg-core.wasm'), pub('ffmpeg/ffmpeg-core.wasm'), true],
+  // AI 화질 개선 엔진. 번들에 넣으면 계산용 워커가 화면 코드까지 불러와 멈추므로 따로 둔다.
+  [nm('onnxruntime-web/dist/ort.webgpu.min.mjs'), pub('ort/ort.webgpu.min.mjs')],
+  [nm('onnxruntime-web/dist/ort-wasm-simd-threaded.asyncify.mjs'), pub('ort/ort-wasm-simd-threaded.asyncify.mjs')],
+  [nm('onnxruntime-web/dist/ort-wasm-simd-threaded.asyncify.wasm'), pub('ort/ort-wasm-simd-threaded.asyncify.wasm'), true],
 ];
 
 for (const [src, dest, gz] of assets) {
