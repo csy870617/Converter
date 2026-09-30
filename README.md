@@ -24,10 +24,11 @@ MP4 → MP3, Word → PDF, 아이폰 사진(HEIC) → JPG처럼 자주 쓰는 �
 알아 두면 좋은 점:
 - 문서(Word·PPT·Excel) 변환은 처음 한 번 변환 엔진(약 90MB)을 내려받느라 1~2분 걸립니다. 다음부터는 브라우저에 저장되어 빠릅니다.
 - 동영상은 컴퓨터 성능으로 변환하므로 긴 영상의 MP4 변환은 오래 걸릴 수 있고, 1GB가 넘는 파일은 실패할 수 있습니다. MP3 추출은 빠릅니다.
-- AI 화질 개선은 [Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN) 모델을 브라우저 안에서 돌립니다. 단순히 늘리는 것이 아니라 뭉개진 윤곽·질감을 AI가 새로 그려 넣어 눈에 띄게 선명해집니다.
-  - 그래픽카드 가속(WebGPU)이 되는 크롬·엣지에서는 사진에 가장 강력한 모델(67MB)을 쓰고, 안 되는 환경에서는 가벼운 모델(5MB)로 CPU에서 계산합니다(느림).
+- AI 화질 개선은 [Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN) 모델을 브라우저 안에서 돌립니다.
+  - **원본을 훼손하지 않도록** AI 결과를 원래 크기로 다시 줄였을 때 원본과 같아지도록 바로잡습니다(역투영). 그래서 없는 무늬를 지어내거나 얼굴·글자·색이 바뀌는 왜곡이 크게 줄었습니다. 측정 결과는 [scripts/model/README.md](scripts/model/README.md)에 있습니다.
+  - 그래픽카드 가속(WebGPU)이 되는 크롬·엣지에서 빠르고, 안 되면 CPU로 계산합니다(느림). 모델은 약 5MB입니다.
   - 작은 사진(스마트폰 캡처, 옛날 사진, 웹 이미지)일수록 효과가 큽니다. 결과는 최대 1600만 화소까지 커집니다.
-  - 동영상은 장면을 한 장씩 처리하므로 오래 걸립니다(그래픽카드가 있어도 1분 영상에 수 분~수십 분). 결과는 최대 4K입니다.
+  - 동영상은 장면을 한 장씩 처리하므로 오래 걸립니다. 멈춘 장면은 건너뛰고, 크롬·엣지에서는 그래픽카드의 동영상 인코더로 저장합니다. 결과는 최대 4K입니다.
 - 한글 문서는 나눔고딕·나눔명조 글꼴로 변환됩니다. 원본 글꼴과 모양이 조금 다를 수 있습니다.
 - 크롬 또는 엣지 최신 버전을 권장합니다.
 
@@ -53,7 +54,8 @@ npm test           # 실제 브라우저로 모든 변환을 시험 (build 후 �
 
 구성:
 - `src/main.js`: 화면
-- `src/upscale.js`: AI 화질 개선 ([ONNX Runtime Web](https://onnxruntime.ai/), 모델 파일은 `public/models/`, [BSD-3-Clause](https://github.com/xinntao/Real-ESRGAN/blob/master/LICENSE))
+- `src/upscale.js`: AI 화질 개선 ([ONNX Runtime Web](https://onnxruntime.ai/), [mp4-muxer](https://github.com/Vanilagy/mp4-muxer))
+- `scripts/model/`: AI 모델 만들기(`build.py`)와 화질 측정(`evaluate.py`). 모델 파일은 `public/models/` ([Real-ESRGAN, BSD-3-Clause](https://github.com/xinntao/Real-ESRGAN/blob/master/LICENSE))
 - `src/engines.js`: 변환 엔진 ([ffmpeg.wasm](https://github.com/ffmpegwasm/ffmpeg.wasm), [LibreOffice WASM](https://github.com/matbeedotcom/libreoffice-document-converter), [PDF.js](https://mozilla.github.io/pdf.js/), [pdf-lib](https://pdf-lib.js.org/), [heic-to](https://github.com/hoppergee/heic-to))
 - `src/formats.js`: 지원 형식 목록
 - `public/sw.js`: 서비스 워커. GitHub Pages에서 할 수 없는 보안 헤더 설정과 압축된 엔진 파일 풀기를 대신 합니다.

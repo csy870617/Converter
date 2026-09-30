@@ -59,7 +59,7 @@ function imageWidth(b) {
 
 const LABEL = { up2: '고화질 2배', up4: '고화질 4배' };
 
-// [입력 파일들, 변환 형식, 예상 결과 파일 이름, 예상 가로 크기]
+// [입력 파일들, 변환 형식, 예상 결과 파일 이름, 예상 가로 크기, 동영상 코덱 강제]
 const CASES = [
   [['영상.mp4'], 'mp3', '영상.mp3'],
   [['영상.mp4'], 'wav', '영상.wav'],
@@ -103,7 +103,8 @@ const CASES = [
   [['스캔.pdf'], 'docx', '스캔.docx'],
   [['사진.jpg'], 'up2', '사진_고화질2배.jpg', 1600],
   [['투명.png'], 'up4', '투명_고화질4배.png'],
-  [['작은영상.mp4'], 'up4', '작은영상_고화질4배.mp4'], // 장면 60개: 여러 묶음으로 나눠 처리하는 경로까지 확인
+  [['작은영상.mp4'], 'up4', '작은영상_고화질4배.mp4'], // 하드웨어 인코더가 없을 때 (ffmpeg 인코딩)
+  [['작은영상.mp4'], 'up2', '작은영상_고화질2배.mp4', null, 'vp9'], // 브라우저 인코더(WebCodecs) 경로. 크로미움엔 H.264가 없어 VP9로 확인
 ];
 
 const only = process.argv[2] ? new RegExp(process.argv[2]) : null;
@@ -120,12 +121,13 @@ await page.goto(url);
 await page.waitForFunction(() => self.crossOriginIsolated, null, { timeout: 30000 });
 
 let failed = 0;
-for (const [inputs, target, expected, width] of CASES) {
-  const label = `${inputs.join(' + ')} → ${LABEL[target] || target.toUpperCase()}`;
+for (const [inputs, target, expected, width, codec] of CASES) {
+  const label = `${inputs.join(' + ')} → ${LABEL[target] || target.toUpperCase()}${codec ? ` (${codec})` : ''}`;
   if (only && !only.test(label)) continue;
   const started = Date.now();
   try {
     await page.reload();
+    await page.evaluate((c) => (c ? localStorage.setItem('upscale-codec', c) : localStorage.removeItem('upscale-codec')), codec ?? null);
     await page.setInputFiles('#picker', inputs.map((name) => ({
       name, mimeType: 'application/octet-stream', buffer: fs.readFileSync(path.join(fixtures, name)),
     })));
