@@ -3,7 +3,7 @@ export const CATEGORIES = [
   {
     id: 'video', name: '동영상', engine: 'media',
     exts: ['mp4', 'mov', 'avi', 'mkv', 'webm', 'wmv', 'flv', 'm4v', '3gp', 'mpg', 'mpeg', 'ts'],
-    targets: ['mp3', 'wav', 'm4a', 'mp4', 'gif'],
+    targets: ['mp3', 'wav', 'm4a', 'mp4', 'gif', 'up2', 'up4'],
   },
   {
     id: 'audio', name: '오디오', engine: 'media',
@@ -13,7 +13,7 @@ export const CATEGORIES = [
   {
     id: 'image', name: '이미지', engine: 'image',
     exts: ['jpg', 'jpeg', 'png', 'webp', 'heic', 'heif', 'avif', 'bmp', 'gif', 'tif', 'tiff'],
-    targets: ['jpg', 'png', 'webp', 'pdf', 'ico'],
+    targets: ['jpg', 'png', 'webp', 'pdf', 'ico', 'up2', 'up4'],
   },
   {
     id: 'word', name: 'Word 문서', engine: 'office',
@@ -36,6 +36,12 @@ export const CATEGORIES = [
     targets: ['docx', 'jpg', 'png', 'txt'],
   },
 ];
+
+/** AI 화질 개선(업스케일) 선택지: 배율 */
+export const UPSCALE = { up2: 2, up4: 4 };
+
+/** 화면에 보여줄 이름 */
+export const targetLabel = (t) => (UPSCALE[t] ? `고화질 ${UPSCALE[t]}배` : t.toUpperCase());
 
 const SAME = { jpeg: 'jpg', tif: 'tiff', heif: 'heic' };
 

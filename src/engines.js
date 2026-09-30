@@ -1,11 +1,11 @@
 // 실제 변환 엔진. 모든 변환은 브라우저 안에서 이루어지며 파일은 어디로도 전송되지 않는다.
 // 무거운 엔진(ffmpeg, LibreOffice, PDF.js 등)은 필요할 때 처음 한 번만 불러온다.
-import { ConvertError, MIME, extOf, stemOf } from './formats.js';
+import { ConvertError, MIME, UPSCALE, extOf, stemOf } from './formats.js';
 
-const asset = (path) => new URL(path, document.baseURI).href;
+export const asset = (path) => new URL(path, document.baseURI).href;
 
 /** .gz로 올려 둔 큰 파일의 주소. 서비스 워커가 없으면 직접 받아서 푼다. */
-async function bigAsset(path) {
+export async function bigAsset(path) {
   if (navigator.serviceWorker?.controller) return asset(path);
   const res = await fetch(asset(`${path}.gz`));
   if (!res.ok) throw new ConvertError('변환 엔진 파일을 받지 못했습니다. 인터넷 연결을 확인해 주세요.');
@@ -13,7 +13,7 @@ async function bigAsset(path) {
   return URL.createObjectURL(blob);
 }
 
-const out = (name, ext, data) => ({ name: `${name}.${ext}`, blob: data instanceof Blob ? data : new Blob([data], { type: MIME[ext] }) });
+export const out = (name, ext, data) => ({ name: `${name}.${ext}`, blob: data instanceof Blob ? data : new Blob([data], { type: MIME[ext] }) });
 
 // ---------------------------------------------------------------------------
 // 동영상 / 오디오 (ffmpeg.wasm)
@@ -33,7 +33,7 @@ const FFMPEG_ARGS = {
 let ffmpegPromise = null;
 let mediaJob = 0;
 
-function loadFFmpeg(status) {
+export function loadFFmpeg(status) {
   if (!ffmpegPromise) {
     status('동영상·오디오 변환 엔진을 불러오는 중… (처음 한 번, 약 10MB)');
     ffmpegPromise = (async () => {
@@ -87,9 +87,9 @@ async function convertMedia(file, target, { status, progress }) {
 // 이미지 (Canvas, HEIC, TIFF)
 // ---------------------------------------------------------------------------
 
-const MAX_PIXELS = 16_000_000; // 사파리 캔버스 한계
+export const MAX_PIXELS = 16_000_000; // 사파리 캔버스 한계
 
-async function decodeImage(file) {
+export async function decodeImage(file) {
   const ext = extOf(file.name);
   try {
     if (ext === 'heic' || ext === 'heif') {
@@ -132,7 +132,7 @@ function toCanvas(bitmap, { white = false, size = null } = {}) {
   return canvas;
 }
 
-function canvasBlob(canvas, type, quality) {
+export function canvasBlob(canvas, type, quality) {
   return new Promise((resolve, reject) => canvas.toBlob(
     (b) => (b ? resolve(b) : reject(new ConvertError('이미지를 만들지 못했습니다.'))), type, quality,
   ));
@@ -439,7 +439,12 @@ const ENGINES = { media: convertMedia, image: convertImage, pdf: convertPdf, off
  * @param {{status: (msg: string) => void, progress: (p: number) => void}} ctx
  * @returns {Promise<{name: string, blob: Blob}[]>}
  */
-export function convertFile(file, engine, target, ctx) {
+export async function convertFile(file, engine, target, ctx) {
+  const up = UPSCALE[target];
+  if (up) {
+    const { upscaleImage, upscaleVideo } = await import('./upscale.js');
+    return (engine === 'image' ? upscaleImage : upscaleVideo)(file, up, ctx);
+  }
   return ENGINES[engine](file, target, ctx);
 }
 

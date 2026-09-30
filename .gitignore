@@ -2,6 +2,7 @@ node_modules/
 dist/
 public/lo/
 public/ffmpeg/
+public/ort/
 test-results/
 public/pdfjs/
 .venv/
