@@ -59,7 +59,7 @@ function imageWidth(b) {
 
 const LABEL = { up2: '고화질 2배', up4: '고화질 4배' };
 
-// [입력 파일들, 변환 형식, 예상 결과 파일 이름, 예상 가로 크기, 동영상 코덱 강제]
+// [입력 파일들, 변환 형식, 예상 결과 파일 이름, 예상 가로 크기, 동영상 코덱 강제, AI 세기 '강하게']
 const CASES = [
   [['영상.mp4'], 'mp3', '영상.mp3'],
   [['영상.mp4'], 'wav', '영상.wav'],
@@ -106,6 +106,8 @@ const CASES = [
   [['작은영상.mp4'], 'up4', '작은영상_고화질4배.mp4'], // 하드웨어 인코더가 없을 때 (ffmpeg 인코딩)
   [['작은영상.mp4'], 'up2', '작은영상_고화질2배.mp4', null, 'vp9'], // ffmpeg로 풀고 브라우저 인코더로 묶기. 크로미움엔 H.264가 없어 VP9로 확인
   [['작은영상.webm'], 'up2', '작은영상_고화질2배.mp4', null, 'vp9'], // 브라우저만으로 풀고 묶기 (ffmpeg 없이)
+  [['사진.jpg'], 'up2', '사진_고화질2배_강하게.jpg', 1600, null, true],
+  [['작은영상.webm'], 'up4', '작은영상_고화질4배_강하게.mp4', null, 'vp9', true],
 ];
 
 const only = process.argv[2] ? new RegExp(process.argv[2]) : null;
@@ -122,8 +124,8 @@ await page.goto(url);
 await page.waitForFunction(() => self.crossOriginIsolated, null, { timeout: 30000 });
 
 let failed = 0;
-for (const [inputs, target, expected, width, codec] of CASES) {
-  const label = `${inputs.join(' + ')} → ${LABEL[target] || target.toUpperCase()}${codec ? ` (${codec})` : ''}`;
+for (const [inputs, target, expected, width, codec, strong] of CASES) {
+  const label = `${inputs.join(' + ')} → ${LABEL[target] || target.toUpperCase()}${strong ? ' 강하게' : ''}${codec ? ` (${codec})` : ''}`;
   if (only && !only.test(label)) continue;
   const started = Date.now();
   try {
@@ -133,6 +135,7 @@ for (const [inputs, target, expected, width, codec] of CASES) {
       name, mimeType: 'application/octet-stream', buffer: fs.readFileSync(path.join(fixtures, name)),
     })));
     await page.getByRole('button', LABEL[target] ? { name: LABEL[target] } : { name: target.toUpperCase(), exact: true }).click();
+    if (LABEL[target]) await page.getByRole('button', { name: strong ? '강하게' : '자연스럽게', exact: true }).click();
     if (expected === null) {
       await page.click('#go');
       await page.waitForSelector('#msg.err', { timeout: 600000 });

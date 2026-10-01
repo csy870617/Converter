@@ -29,7 +29,8 @@ setupServiceWorker();
 // 화면
 // ---------------------------------------------------------------------------
 const $ = (id) => document.getElementById(id);
-const state = { files: [], target: null, busy: false, status: new Map() };
+const state = { files: [], target: null, busy: false, status: new Map(), strong: false };
+try { state.strong = localStorage.getItem('upscale-strength') === 'strong'; } catch { /* 저장 불가해도 동작 */ }
 let lastUrl = null;
 
 const IMAGE = CATEGORIES.find((c) => c.id === 'image');
@@ -128,6 +129,11 @@ function render() {
   $('officeNote').classList.toggle('hidden', !needsOffice);
   const upscaling = !!UPSCALE[state.target];
   $('upNote').classList.toggle('hidden', !upscaling);
+  $('strengthRow').classList.toggle('hidden', !upscaling);
+  for (const b of document.querySelectorAll('[data-strength]')) {
+    b.setAttribute('aria-pressed', String((b.dataset.strength === 'strong') === state.strong));
+    b.disabled = state.busy;
+  }
   $('upVideoNote').classList.toggle('hidden', !(upscaling && usable.some((f) => categoryOf(f.name).id === 'video')));
 
   const go = $('go');
@@ -206,6 +212,7 @@ async function run() {
     const ctx = {
       status: (text) => { setMsg(`${prefix}${text}`); setBar('busy'); },
       progress: (p) => { setBar('progress', p); setState(`${Math.round(p * 100)}%`); },
+      strong: state.strong,
     };
     setState('변환 중…');
     ctx.status(`${job.label} 변환 중…`);
@@ -260,6 +267,15 @@ for (const b of document.querySelectorAll('[data-theme-choice]')) {
 }
 darkQuery.addEventListener('change', showTheme);
 showTheme();
+
+// AI 화질 개선 세기 (고른 것은 기억한다)
+for (const b of document.querySelectorAll('[data-strength]')) {
+  b.onclick = () => {
+    state.strong = b.dataset.strength === 'strong';
+    try { localStorage.setItem('upscale-strength', state.strong ? 'strong' : 'natural'); } catch { /* 저장 불가해도 동작 */ }
+    render();
+  };
+}
 
 // 지원 형식 표
 $('formats').replaceChildren(...CATEGORIES.map((c) => {

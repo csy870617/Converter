@@ -14,6 +14,11 @@ const MODEL = { file: 'models/fidelity-x4.onnx', half: 'models/fidelity-x4-fp16.
 const STRICT = { core: 0, soft: 0 };
 const LOSSY = { core: 0.015, soft: 1 };
 const LOSSLESS = ['png', 'bmp', 'tif', 'tiff', 'gif'];
+// '강하게' 모드: 결과에 윤곽 강조를 더한다. AI 결과는 실제 원본보다 조금 무른 편이라(윤곽 세기 약 0.7배),
+// 강조 1.0이면 원본과 비슷하거나 조금 더 또렷해진다. 측정 결과는 scripts/model/README.md 참고.
+const STRONG = 1.0;
+const fidelityFor = (lossless, strong) => ({ ...(lossless ? STRICT : LOSSY), sharp: strong ? STRONG : 0 });
+const suffix = (scale, strong) => `_고화질${scale}배${strong ? '_강하게' : ''}`;
 const PAD = 16; // 타일 경계가 티 나지 않도록 주변을 겹쳐서 계산한다
 const WHOLE = 400_000; // 그래픽카드에서는 이 화소 수까지 한 번에 계산한다 (조각내면 느려진다)
 
@@ -187,8 +192,12 @@ async function enhance({ data, width: W, height: H, channels }, outW, outH, engi
   const ky = outH / H;
   const cols = Math.ceil(W / tile);
   const rows = Math.ceil(H / tile);
-  const core = new ort.Tensor('float32', new Float32Array([fidelity.core]), [1]);
-  const soft = new ort.Tensor('float32', new Float32Array([fidelity.soft]), [1]);
+  const scalar = (v) => new ort.Tensor('float32', new Float32Array([v]), [1]);
+  const core = scalar(fidelity.core);
+  const soft = scalar(fidelity.soft);
+  const sharp = scalar(fidelity.sharp || 0);
+  // 강조 반경: 최종 결과에서 1화소. 모델은 4배 크기로 계산하므로 그 크기에 맞춰 넓힌다.
+  const radius = scalar(Math.min(4, Math.max(1, (4 * W) / outW)));
 
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
@@ -212,7 +221,7 @@ async function enhance({ data, width: W, height: H, channels }, outW, outH, engi
           input[2 * plane + q] = data[p + 2] / 255;
         }
       }
-      const feeds = { input: new ort.Tensor('float32', input, [1, 3, th, tw]), core, soft };
+      const feeds = { input: new ort.Tensor('float32', input, [1, 3, th, tw]), core, soft, sharp, radius };
       const { output } = await session.run(feeds);
       const ow = tw * 4;
       const oh = th * 4;
@@ -277,7 +286,7 @@ const nextFrame = () => new Promise((r) => setTimeout(r, 0)); // 화면이 멈�
 // 사진
 // ---------------------------------------------------------------------------
 
-export async function upscaleImage(file, scale, { status, progress }) {
+export async function upscaleImage(file, scale, { status, progress, strong }) {
   const bitmap = await decodeImage(file);
   const engine = await loadEngine(status);
   const W = bitmap.width;
@@ -287,7 +296,7 @@ export async function upscaleImage(file, scale, { status, progress }) {
   src.drawImage(bitmap, 0, 0);
   const pixels = src.getImageData(0, 0, W, H).data;
   const ext = extOf(file.name);
-  const fidelity = LOSSLESS.includes(ext) ? STRICT : LOSSY;
+  const fidelity = fidelityFor(LOSSLESS.includes(ext), strong);
 
   const how = engine.gpu ? '그래픽카드' : 'CPU(그래픽카드 가속 없음, 느릴 수 있음)';
   status(`AI가 화질을 높이는 중… ${W}×${H} → ${w}×${h} · ${how}`);
@@ -312,7 +321,7 @@ export async function upscaleImage(file, scale, { status, progress }) {
     rctx.putImageData(full, 0, 0);
   }
 
-  const name = `${stemOf(file.name)}_고화질${scale}배`;
+  const name = `${stemOf(file.name)}${suffix(scale, strong)}`;
   if (ext === 'jpg' || ext === 'jpeg') return [out(name, 'jpg', await canvasBlob(canvas, 'image/jpeg', 0.95))];
   if (ext === 'webp') {
     const blob = await canvasBlob(canvas, 'image/webp', 0.95);
@@ -339,7 +348,7 @@ function sameFrame(a, b) {
  * 장면을 하나씩 받아 AI로 키우는 도우미. 같은 장면이 이어지면 앞 결과를 다시 쓴다.
  * 결과는 캔버스 두 장을 번갈아 쓴다 (인코더가 앞 장면을 읽는 동안 다음 장면을 그릴 수 있게).
  */
-function frameUpscaler(engine, ow, oh, onFrame) {
+function frameUpscaler(engine, ow, oh, fidelity, onFrame) {
   const canvases = [makeCanvas(ow, oh), makeCanvas(ow, oh)];
   let prev = null;
   let prevCanvas = null;
@@ -353,7 +362,7 @@ function frameUpscaler(engine, ow, oh, onFrame) {
         canvas = prevCanvas;
         skipped++;
       } else {
-        canvas = await enhance(frame, ow, oh, engine, LOSSY, null, canvases[n++ % 2]);
+        canvas = await enhance(frame, ow, oh, engine, fidelity, null, canvases[n++ % 2]);
       }
       prev = frame.data.slice();
       prevCanvas = canvas;
@@ -375,7 +384,7 @@ async function pickCodec(mb, w, h) {
  * 빠른 길: 브라우저(그래픽카드)가 직접 동영상을 풀고(디코딩) 다시 묶는다(인코딩). ffmpeg가 필요 없다.
  * 풀 수 없거나 묶을 수 없는 형식이면 null을 돌려준다.
  */
-async function upscaleVideoWebCodecs(file, scale, { status, progress }) {
+async function upscaleVideoWebCodecs(file, scale, { status, progress, strong }) {
   if (!('VideoEncoder' in self) || !('VideoDecoder' in self)) return null;
   const mb = await import('mediabunny');
   const input = new mb.Input({ source: new mb.BlobSource(file), formats: mb.ALL_FORMATS });
@@ -398,7 +407,7 @@ async function upscaleVideoWebCodecs(file, scale, { status, progress }) {
     const started = Date.now();
     let done = 0;
     const reader = makeCanvas(W, H).getContext('2d', { willReadFrequently: true });
-    const upscaler = frameUpscaler(engine, ow, oh, async () => {
+    const upscaler = frameUpscaler(engine, ow, oh, fidelityFor(false, strong), async () => {
       done++;
       const skip = upscaler.skipped ? ` · 같은 장면 ${upscaler.skipped}개 건너뜀` : '';
       status(`AI가 화질을 높이는 중… 장면 ${done}/${Math.max(done, total)} · ${ow}×${oh} · ${how}${skip}${timeLeft(started, done, Math.max(done, total))}`);
@@ -435,7 +444,7 @@ async function upscaleVideoWebCodecs(file, scale, { status, progress }) {
     // 소리를 옮길 수 없어 빠지게 되면 ffmpeg 길로 처리한다 (소리 없는 결과를 만들지 않는다)
     if (!conversion.isValid || conversion.discardedTracks.some((d) => d.track.type === 'audio')) return null;
     await conversion.execute();
-    return [out(`${stemOf(file.name)}_고화질${scale}배`, 'mp4', output.target.buffer)];
+    return [out(`${stemOf(file.name)}${suffix(scale, strong)}`, 'mp4', output.target.buffer)];
   } finally {
     if (conversion && conversion.state === 'executing') await conversion.cancel?.().catch(() => {});
     input.dispose?.();
@@ -486,7 +495,7 @@ async function makeEncoder(w, h, fps) {
 }
 
 /** 느린 길: ffmpeg로 동영상을 풀고, 브라우저 인코더가 없으면 ffmpeg로 다시 묶는다. */
-async function upscaleVideoFFmpeg(file, scale, { status, progress }) {
+async function upscaleVideoFFmpeg(file, scale, { status, progress, strong }) {
   const ff = await loadFFmpegThreaded(status);
   const id = ++videoJob;
   const dir = `/up${id}`;
@@ -535,7 +544,7 @@ async function upscaleVideoFFmpeg(file, scale, { status, progress }) {
     const segments = [];
     let done = 0;
     const started = Date.now();
-    const upscaler = frameUpscaler(engine, ow, oh, async () => {
+    const upscaler = frameUpscaler(engine, ow, oh, fidelityFor(false, strong), async () => {
       done++;
       progress(Math.min(0.99, done / total));
       const skip = upscaler.skipped ? ` · 같은 장면 ${upscaler.skipped}개 건너뜀` : '';
@@ -603,7 +612,7 @@ async function upscaleVideoFFmpeg(file, scale, { status, progress }) {
     if (code !== 0) throw fail('동영상을 만들지 못했습니다.');
     const data = await ff.readFile(output);
     await ff.deleteFile(output);
-    return [out(`${stemOf(file.name)}_고화질${scale}배`, 'mp4', data)];
+    return [out(`${stemOf(file.name)}${suffix(scale, strong)}`, 'mp4', data)];
   } finally {
     encoder?.close();
     ff.off('log', onLog);

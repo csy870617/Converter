@@ -76,6 +76,16 @@ h1 { font-size: 26px; margin: 0; }
 .fmt.ai::before { content: "✦ "; }
 .fmt:hover { border-color: var(--accent); }
 .fmt.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.strength { display: flex; align-items: center; gap: 0; margin-top: 12px; }
+.strength span { color: var(--muted); font-size: 13px; font-weight: 600; margin-right: 10px; }
+.strength button {
+  border: 1px solid var(--line); background: var(--card); color: var(--text); padding: 7px 14px; font-size: 14px; font-weight: 600;
+  cursor: pointer; font-family: inherit;
+}
+.strength button:first-of-type { border-radius: 10px 0 0 10px; }
+.strength button:last-of-type { border-radius: 0 10px 10px 0; border-left: 0; }
+.strength button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+.strength button:disabled { opacity: .6; cursor: not-allowed; }
 .hint { color: var(--muted); font-size: 14px; margin: 0; }
 details .hint { margin-top: 10px; }
 label.merge { display: flex; gap: 8px; align-items: center; margin-top: 12px; font-size: 15px; }
