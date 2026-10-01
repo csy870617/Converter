@@ -104,7 +104,8 @@ const CASES = [
   [['사진.jpg'], 'up2', '사진_고화질2배.jpg', 1600],
   [['투명.png'], 'up4', '투명_고화질4배.png'],
   [['작은영상.mp4'], 'up4', '작은영상_고화질4배.mp4'], // 하드웨어 인코더가 없을 때 (ffmpeg 인코딩)
-  [['작은영상.mp4'], 'up2', '작은영상_고화질2배.mp4', null, 'vp9'], // 브라우저 인코더(WebCodecs) 경로. 크로미움엔 H.264가 없어 VP9로 확인
+  [['작은영상.mp4'], 'up2', '작은영상_고화질2배.mp4', null, 'vp9'], // ffmpeg로 풀고 브라우저 인코더로 묶기. 크로미움엔 H.264가 없어 VP9로 확인
+  [['작은영상.webm'], 'up2', '작은영상_고화질2배.mp4', null, 'vp9'], // 브라우저만으로 풀고 묶기 (ffmpeg 없이)
 ];
 
 const only = process.argv[2] ? new RegExp(process.argv[2]) : null;

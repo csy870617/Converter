@@ -1,7 +1,7 @@
 // 서비스 워커: GitHub Pages에서 할 수 없는 두 가지를 대신 해 준다.
 //  1) COOP/COEP 헤더를 붙여 SharedArrayBuffer를 쓸 수 있게 한다 (문서 변환 엔진에 필요).
 //  2) 큰 WebAssembly 파일은 .gz로 올려 두고, 요청이 오면 받아서 풀어 준다.
-const GZIPPED = ['lo/soffice.wasm', 'lo/soffice.data', 'ffmpeg/ffmpeg-core.wasm', 'ort/ort-wasm-simd-threaded.asyncify.wasm'];
+const GZIPPED = ['lo/soffice.wasm', 'lo/soffice.data', 'ffmpeg/ffmpeg-core.wasm', 'ffmpeg-mt/ffmpeg-core.wasm', 'ort/ort-wasm-simd-threaded.asyncify.wasm'];
 
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', (event) => event.waitUntil(self.clients.claim()));

@@ -31,6 +31,7 @@ const FFMPEG_ARGS = {
 };
 
 let ffmpegPromise = null;
+let ffmpegMtPromise = null;
 let mediaJob = 0;
 
 export function loadFFmpeg(status) {
@@ -44,6 +45,31 @@ export function loadFFmpeg(status) {
     })().catch((e) => { ffmpegPromise = null; throw e; });
   }
   return ffmpegPromise;
+}
+
+/**
+ * 여러 코어를 쓰는 ffmpeg (인코딩이 1.5배 이상 빠르다). 동영상 화질 개선에서 브라우저 인코더가 없을 때만 쓴다.
+ * 보안 헤더(서비스 워커)가 없거나 불러오지 못하면 보통 ffmpeg를 쓴다.
+ */
+export function loadFFmpegThreaded(status) {
+  if (!self.crossOriginIsolated) return loadFFmpeg(status);
+  if (!ffmpegMtPromise) {
+    status('동영상 엔진(여러 코어용)을 불러오는 중… (처음 한 번, 약 11MB)');
+    ffmpegMtPromise = (async () => {
+      const { FFmpeg } = await import('@ffmpeg/ffmpeg');
+      const ff = new FFmpeg();
+      await ff.load({
+        coreURL: asset('ffmpeg-mt/ffmpeg-core.js'),
+        wasmURL: await bigAsset('ffmpeg-mt/ffmpeg-core.wasm'),
+        workerURL: asset('ffmpeg-mt/ffmpeg-core.worker.js'),
+      });
+      return ff;
+    })().catch((e) => {
+      console.warn('여러 코어용 ffmpeg를 불러오지 못해 보통 ffmpeg를 씁니다', e);
+      return loadFFmpeg(status);
+    });
+  }
+  return ffmpegMtPromise;
 }
 
 async function convertMedia(file, target, { status, progress }) {
