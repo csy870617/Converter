@@ -23,8 +23,16 @@ class Fidelity(nn.Module):
     def blur(s, x):
         x = F.pad(x, (1, 1, 1, 1), mode='replicate')
         return F.conv2d(F.conv2d(x, s.gh, groups=3), s.gv, groups=3)
-    def forward(s, x, core, soft):
+    def gauss(s, x, sigma):
+        # sigma(4배 결과 기준 화소)를 입력으로 받아 그때그때 가우스 흐림 필터를 만든다
+        t = torch.arange(-12, 13, dtype=x.dtype, device=x.device)
+        k = torch.exp(-t * t / (2 * sigma * sigma)); k = k / k.sum()
+        x = F.pad(x, (12, 12, 12, 12), mode='replicate')
+        x = F.conv2d(x, k.view(1, 1, 1, 25).repeat(3, 1, 1, 1), groups=3)
+        return F.conv2d(x, k.view(1, 1, 25, 1).repeat(3, 1, 1, 1), groups=3)
+    def forward(s, x, core, soft, sharp, radius):
         # core: 이 값보다 작은 차이(잡음·압축 흔적)는 무시, soft: 1이면 비교 전에 살짝 흐리게(압축된 원본용)
+        # sharp: '강하게' 모드의 윤곽 강조 세기(0이면 끔), radius: 강조 반경(4배 결과 기준 화소)
         y = s.sr(x)
         tgt = x + soft * (s.blur(x) - x)
         for _ in range(s.iters):
@@ -32,4 +40,5 @@ class Fidelity(nn.Module):
             r = tgt - d
             r = torch.sign(r) * F.relu(r.abs() - core)
             y = y + s.up(r)
-        return y.clamp(0, 1)
+        y = y.clamp(0, 1)
+        return (y + sharp * (y - s.gauss(y, radius))).clamp(0, 1)

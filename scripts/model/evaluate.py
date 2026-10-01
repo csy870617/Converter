@@ -33,7 +33,8 @@ def psnr(a, b, border=4):
 lp = lpips.LPIPS(net='alex', verbose=False)
 S = ort.InferenceSession(os.path.join(here, '..', '..', 'public', 'models', 'fidelity-x4.onnx'))
 def new(L, core, soft):
-    f = {'input': L.numpy(), 'core': np.array([core], np.float32), 'soft': np.array([soft], np.float32)}
+    f = {'input': L.numpy(), 'core': np.array([core], np.float32), 'soft': np.array([soft], np.float32),
+         'sharp': np.array([0], np.float32), 'radius': np.array([1], np.float32)}
     return torch.from_numpy(S.run(None, f)[0])
 old = {'기존 동영상용(general)': load('general'), '기존 사진용(x4plus)': load('x4plus')}
 print('PSNR·SSIM: 원본과 얼마나 같은지(높을수록 좋음) / LPIPS: 사람 눈에 얼마나 달라 보이는지(낮을수록 좋음)')
