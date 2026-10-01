@@ -99,6 +99,13 @@ function render() {
   const box = $('targets');
   box.replaceChildren();
   for (const t of common) {
+    // AI 화질 개선은 형식 바꾸기와 성격이 달라 둘째 줄에 따로 보여준다
+    if (UPSCALE[t] && !box.querySelector('.ai')) {
+      const row = document.createElement('div');
+      row.className = 'ai-row';
+      row.textContent = 'AI 화질 개선';
+      box.append(row);
+    }
     const b = document.createElement('button');
     b.className = `fmt${t === state.target ? ' on' : ''}`;
     b.textContent = targetLabel(t);
