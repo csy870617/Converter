@@ -19,6 +19,9 @@ const assets = [
   [nm('@matbee/libreoffice-converter/dist/browser.worker.global.js'), pub('lo/browser.worker.js')],
   [nm('@ffmpeg/core/dist/esm/ffmpeg-core.js'), pub('ffmpeg/ffmpeg-core.js')],
   [nm('@ffmpeg/core/dist/esm/ffmpeg-core.wasm'), pub('ffmpeg/ffmpeg-core.wasm'), true],
+  [nm('@ffmpeg/core-mt/dist/esm/ffmpeg-core.js'), pub('ffmpeg-mt/ffmpeg-core.js')],
+  [nm('@ffmpeg/core-mt/dist/esm/ffmpeg-core.worker.js'), pub('ffmpeg-mt/ffmpeg-core.worker.js')],
+  [nm('@ffmpeg/core-mt/dist/esm/ffmpeg-core.wasm'), pub('ffmpeg-mt/ffmpeg-core.wasm'), true],
   // AI 화질 개선 엔진. 번들에 넣으면 계산용 워커가 화면 코드까지 불러와 멈추므로 따로 둔다.
   [nm('onnxruntime-web/dist/ort.webgpu.min.mjs'), pub('ort/ort.webgpu.min.mjs')],
   [nm('onnxruntime-web/dist/ort-wasm-simd-threaded.asyncify.mjs'), pub('ort/ort-wasm-simd-threaded.asyncify.mjs')],
