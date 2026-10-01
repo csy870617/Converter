@@ -129,7 +129,8 @@ function render() {
   $('officeNote').classList.toggle('hidden', !needsOffice);
   const upscaling = !!UPSCALE[state.target];
   $('upNote').classList.toggle('hidden', !upscaling);
-  $('strengthRow').classList.toggle('hidden', !upscaling);
+  // 세기 선택은 AI 화질 개선 버튼이 보이면 항상 함께 보여준다 (고르기 전에도 눈에 띄도록)
+  $('strengthRow').classList.toggle('hidden', !common.some((t) => UPSCALE[t]));
   for (const b of document.querySelectorAll('[data-strength]')) {
     b.setAttribute('aria-pressed', String((b.dataset.strength === 'strong') === state.strong));
     b.disabled = state.busy;
