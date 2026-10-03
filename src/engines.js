@@ -36,7 +36,7 @@ let mediaJob = 0;
 
 export function loadFFmpeg(status) {
   if (!ffmpegPromise) {
-    status('동영상·오디오 변환 엔진을 불러오는 중… (처음 한 번, 약 10MB)');
+    status('준비 중…');
     ffmpegPromise = (async () => {
       const { FFmpeg } = await import('@ffmpeg/ffmpeg');
       const ff = new FFmpeg();
@@ -54,7 +54,7 @@ export function loadFFmpeg(status) {
 export function loadFFmpegThreaded(status) {
   if (!self.crossOriginIsolated) return loadFFmpeg(status);
   if (!ffmpegMtPromise) {
-    status('동영상 엔진(여러 코어용)을 불러오는 중… (처음 한 번, 약 11MB)');
+    status('준비 중…');
     ffmpegMtPromise = (async () => {
       const { FFmpeg } = await import('@ffmpeg/ffmpeg');
       const ff = new FFmpeg();
@@ -394,7 +394,7 @@ function loadOffice(status) {
   }
   if (!officePromise) {
     officePromise = (async () => {
-      status('문서 변환 엔진을 불러오는 중… (처음 한 번, 약 90MB · 다음부터는 빠릅니다)');
+      status('준비 중… (처음 한 번 1~2분)');
       const { WorkerBrowserConverter } = await import('@matbee/libreoffice-converter/browser');
       const fonts = await Promise.all(FONTS.map(async (filename) => {
         const res = await fetch(asset(`fonts/${filename}`));
@@ -407,7 +407,7 @@ function loadOffice(status) {
         sofficeWorkerJs: asset('lo/soffice.worker.js'),
         browserWorkerJs: asset('lo/browser.worker.js'),
         fonts,
-        onProgress: (info) => status(`문서 변환 엔진 준비 중… ${Math.round(info.percent)}%`),
+        onProgress: (info) => status(`준비 중… ${Math.round(info.percent)}%`),
       });
       await converter.initialize();
       return converter;
