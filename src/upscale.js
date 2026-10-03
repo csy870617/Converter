@@ -51,14 +51,14 @@ async function fetchModel(file, status) {
     if (done) break;
     chunks.push(value);
     got += value.length;
-    if (total) status(`AI 모델을 내려받는 중… ${Math.round((got / total) * 100)}% (처음 한 번, 약 ${MODEL.size})`);
+    if (total) status(`AI 준비 중… ${Math.round((got / total) * 100)}%`);
   }
   return new Uint8Array(await new Blob(chunks).arrayBuffer());
 }
 
 function loadEngine(status) {
   enginePromise ??= (async () => {
-    status(`AI 모델을 준비하는 중… (처음 한 번, 약 ${MODEL.size})`);
+    status('AI 준비 중…');
     const ort = await loadOrt();
     let adapter = null;
     try { adapter = await navigator.gpu?.requestAdapter(); } catch { /* 그래픽카드 가속 없음 */ }
@@ -298,11 +298,11 @@ export async function upscaleImage(file, scale, { status, progress, strong }) {
   const ext = extOf(file.name);
   const fidelity = fidelityFor(LOSSLESS.includes(ext), strong);
 
-  const how = engine.gpu ? '그래픽카드' : 'CPU(그래픽카드 가속 없음, 느릴 수 있음)';
-  status(`AI가 화질을 높이는 중… ${W}×${H} → ${w}×${h} · ${how}`);
+  const how = engine.gpu ? '' : ' · 느린 모드(CPU)';
+  status(`화질 높이는 중… ${W}×${H} → ${w}×${h}${how}`);
   const started = Date.now();
   const canvas = await enhance({ data: pixels, width: W, height: H, channels: 4 }, w, h, engine, fidelity, async (i, n) => {
-    status(`AI가 화질을 높이는 중… ${w}×${h} · ${how}${timeLeft(started, i, n)}`);
+    status(`화질 높이는 중… ${w}×${h}${how}${timeLeft(started, i, n)}`);
     progress(i / n);
     await nextFrame();
   });
@@ -400,7 +400,7 @@ async function upscaleVideoWebCodecs(file, scale, { status, progress, strong }) 
     if (!codec) return null;
 
     const engine = await loadEngine(status);
-    const how = engine.gpu ? '그래픽카드' : 'CPU(그래픽카드 가속 없음, 매우 느릴 수 있음)';
+    const how = engine.gpu ? '' : ' · 느린 모드(CPU)';
     const duration = await input.computeDuration();
     const stats = await track.computePacketStats(120).catch(() => null);
     const total = Math.max(1, Math.round(duration * (stats?.averagePacketRate || 30)));
@@ -409,12 +409,11 @@ async function upscaleVideoWebCodecs(file, scale, { status, progress, strong }) 
     const reader = makeCanvas(W, H).getContext('2d', { willReadFrequently: true });
     const upscaler = frameUpscaler(engine, ow, oh, fidelityFor(false, strong), async () => {
       done++;
-      const skip = upscaler.skipped ? ` · 같은 장면 ${upscaler.skipped}개 건너뜀` : '';
-      status(`AI가 화질을 높이는 중… 장면 ${done}/${Math.max(done, total)} · ${ow}×${oh} · ${how}${skip}${timeLeft(started, done, Math.max(done, total))}`);
+            status(`화질 높이는 중… ${done}/${Math.max(done, total)}장면${how}${timeLeft(started, done, Math.max(done, total))}`);
       progress(Math.min(0.99, done / total));
       await nextFrame();
     });
-    status(`AI가 화질을 높이는 중… ${W}×${H} → ${ow}×${oh} · ${how}`);
+    status(`화질 높이는 중… ${W}×${H} → ${ow}×${oh}${how}`);
 
     const output = new mb.Output({ format: new mb.Mp4OutputFormat({ fastStart: 'in-memory' }), target: new mb.BufferTarget() });
     conversion = await mb.Conversion.init({
@@ -535,11 +534,11 @@ async function upscaleVideoFFmpeg(file, scale, { status, progress, strong }) {
     const engine = await loadEngine(status);
     const [ow, oh] = videoSize(W, H, scale);
     encoder = await makeEncoder(ow, oh, info.fps);
-    const how = `${engine.gpu ? '그래픽카드' : 'CPU(그래픽카드 가속 없음, 매우 느릴 수 있음)'}${encoder ? '' : ' · 인코딩도 CPU'}`;
+    const how = engine.gpu ? '' : ' · 느린 모드(CPU)';
     const total = Math.max(1, Math.ceil(info.duration * Number(info.fps)));
     const frameBytes = W * H * 3;
     const chunk = Math.max(4, Math.min(240, Math.floor(CHUNK_BYTES / (frameBytes + (encoder ? 0 : ow * oh * 4)))));
-    status(`AI가 화질을 높이는 중… ${W}×${H} → ${ow}×${oh} · ${how}`);
+    status(`화질 높이는 중… ${W}×${H} → ${ow}×${oh}${how}`);
 
     const segments = [];
     let done = 0;
@@ -547,8 +546,7 @@ async function upscaleVideoFFmpeg(file, scale, { status, progress, strong }) {
     const upscaler = frameUpscaler(engine, ow, oh, fidelityFor(false, strong), async () => {
       done++;
       progress(Math.min(0.99, done / total));
-      const skip = upscaler.skipped ? ` · 같은 장면 ${upscaler.skipped}개 건너뜀` : '';
-      status(`AI가 화질을 높이는 중… 장면 ${done}/${Math.max(done, total)} · ${ow}×${oh} · ${how}${skip}${timeLeft(started, done, Math.max(done, total))}`);
+            status(`화질 높이는 중… ${done}/${Math.max(done, total)}장면${how}${timeLeft(started, done, Math.max(done, total))}`);
       await nextFrame();
     });
     for (let k = 0; ; k++) {
@@ -590,7 +588,7 @@ async function upscaleVideoFFmpeg(file, scale, { status, progress, strong }) {
       if (n < chunk) break;
     }
 
-    status('동영상으로 묶는 중…');
+    status('마무리 중…');
     let video;
     if (encoder) {
       await ff.writeFile(`${work}/video.mp4`, await encoder.finish());

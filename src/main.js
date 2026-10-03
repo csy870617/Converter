@@ -32,6 +32,8 @@ const $ = (id) => document.getElementById(id);
 const state = { files: [], target: null, busy: false, status: new Map(), strong: false };
 try { state.strong = localStorage.getItem('upscale-strength') === 'strong'; } catch { /* 저장 불가해도 동작 */ }
 let lastUrl = null;
+let downloads = 0; // 이 페이지에서 자동으로 내려받은 횟수
+let clickedAt = 0; // '변환하기'를 누른 시각
 
 const IMAGE = CATEGORIES.find((c) => c.id === 'image');
 
@@ -117,9 +119,9 @@ function render() {
   }
 
   const hint = $('targetHint');
-  if (!state.files.length) hint.textContent = '먼저 파일을 선택하면 바꿀 수 있는 형식이 나타납니다.';
-  else if (!usable.length) hint.textContent = "지원하지 않는 파일입니다. 아래 '지원하는 형식 보기'를 확인해 주세요.";
-  else if (!common.length) hint.textContent = '서로 종류가 다른 파일이 섞여 있습니다. 같은 종류끼리 변환해 주세요.';
+  if (!state.files.length) hint.textContent = '파일을 먼저 선택하세요.';
+  else if (!usable.length) hint.textContent = '지원하지 않는 파일입니다.';
+  else if (!common.length) hint.textContent = '같은 종류의 파일끼리 변환해 주세요.';
   else hint.textContent = '';
   hint.classList.toggle('hidden', !hint.textContent);
 
@@ -151,12 +153,13 @@ function setMsg(text, kind = '', link = null) {
   msg.className = kind;
   msg.textContent = text;
   if (link) {
-    msg.append('\n');
+    // 직접 누르는 다운로드는 브라우저가 막지 않는다. 다시 받고 싶을 때도 쓴다.
     const a = document.createElement('a');
+    a.className = 'dl';
     a.href = link.href;
     a.download = link.name;
-    a.textContent = `다운로드가 시작되지 않았다면 여기를 누르세요 (${link.name})`;
-    msg.append(a);
+    a.textContent = `⬇ ${link.name} 받기`;
+    msg.append('\n', a);
   }
 }
 
@@ -167,16 +170,26 @@ function setBar(mode, pct = 0) {
   bar.firstElementChild.style.width = `${Math.round(pct * 100)}%`;
 }
 
+/**
+ * 결과 파일을 준비하고, 브라우저가 허락하는 경우에만 자동으로 내려받는다.
+ * 크롬·엣지는 클릭 없이 두 번째 파일부터 자동으로 받으려 하면 '여러 파일 다운로드'로 막는다.
+ * (클릭의 효력은 약 5초). 그래서 첫 파일이거나 클릭 후 4초 안에 변환이 끝난 경우에만 자동으로 받고,
+ * 그 밖에는 '받기' 버튼을 눌러 받게 한다. auto가 false면 버튼으로 받아야 한다.
+ */
 function download(name, blob) {
   if (lastUrl) URL.revokeObjectURL(lastUrl);
   lastUrl = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = lastUrl;
-  a.download = name;
-  document.body.append(a);
-  a.click();
-  a.remove();
-  return { href: lastUrl, name };
+  const auto = downloads === 0 || performance.now() - clickedAt < 4000;
+  if (auto) {
+    const a = document.createElement('a');
+    a.href = lastUrl;
+    a.download = name;
+    document.body.append(a);
+    a.click();
+    a.remove();
+    downloads++;
+  }
+  return { href: lastUrl, name, auto };
 }
 
 async function zipResults(results) {
@@ -197,6 +210,7 @@ async function run() {
   const target = state.target;
   if (!files.length || !target || state.busy) return;
 
+  clickedAt = performance.now();
   state.busy = true;
   state.status.clear();
   $('go').textContent = '변환 중…';
@@ -243,9 +257,9 @@ async function run() {
   const single = results.length === 1;
   const link = single ? download(results[0].name, results[0].blob) : download('변환결과.zip', await zipResults(results));
   let text = single
-    ? `완료! '${link.name}' 파일을 내려받았습니다.`
-    : `완료! 파일 ${results.length}개를 '${link.name}'으로 묶어 내려받았습니다.`;
-  if (errors.length) text += `\n\n일부 파일은 실패했습니다:\n${errors.join('\n')}`;
+    ? `완료!${link.auto ? '' : ' 아래 버튼을 눌러 받으세요.'}`
+    : `완료! 파일 ${results.length}개를 ZIP으로 묶었습니다.${link.auto ? '' : ' 아래 버튼을 눌러 받으세요.'}`;
+  if (errors.length) text += `\n\n실패한 파일:\n${errors.join('\n')}`;
   setMsg(text, errors.length ? 'err' : 'ok', link);
 }
 
