@@ -4,6 +4,14 @@ import { ConvertError, MIME, UPSCALE, categoryOf, extOf, stemOf } from './format
 
 export const asset = (path) => new URL(path, document.baseURI).href;
 
+/**
+ * 인터넷이 끊기거나 사이트가 새로 바뀌어(예전 파일이 지워짐) 필요한 파일을 받지 못했을 때의 안내.
+ * 브라우저는 한 번 못 받은 파일을 기억해 두어서, 새로고침하기 전에는 다시 시도해도 같은 오류가 난다.
+ */
+export const LOAD_FAILED = '필요한 파일을 받지 못했습니다. 인터넷 연결을 확인하고 페이지를 새로고침해 주세요.';
+export const isLoadFailure = (e) =>
+  /dynamically imported module|module script failed|failed to fetch|networkerror|load failed/i.test(String(e?.message ?? e));
+
 const bigAssets = new Map();
 
 /** .gz로 올려 둔 큰 파일의 주소. 서비스 워커가 없으면 직접 받아서 풀고, 한 번 푼 것은 다시 쓴다. */
@@ -65,7 +73,12 @@ export function loadFFmpeg(status) {
       const ff = new FFmpeg();
       await ff.load({ coreURL: asset('ffmpeg/ffmpeg-core.js'), wasmURL: await bigAsset('ffmpeg/ffmpeg-core.wasm') });
       return ff;
-    })().catch((e) => { ffmpegPromise = null; throw e; });
+    })().catch((e) => {
+      ffmpegPromise = null;
+      if (e instanceof ConvertError) throw e;
+      console.error(e);
+      throw new ConvertError('변환 엔진을 불러오지 못했습니다. 인터넷 연결을 확인하고 페이지를 새로고침해 주세요.');
+    });
   }
   return ffmpegPromise;
 }
@@ -90,7 +103,7 @@ export function loadFFmpegThreaded(status) {
     })().catch((e) => {
       console.warn('여러 코어용 ffmpeg를 불러오지 못해 보통 ffmpeg를 씁니다', e);
       return loadFFmpeg(status);
-    });
+    }).catch((e) => { ffmpegMtPromise = null; throw e; }); // 둘 다 못 불러오면 다음에 처음부터 다시 시도한다
   }
   return ffmpegMtPromise;
 }
@@ -202,6 +215,7 @@ export async function decodeImage(file) {
     return await createImageBitmap(file, { imageOrientation: 'from-image' });
   } catch (e) {
     if (e instanceof ConvertError) throw e;
+    if (isLoadFailure(e)) throw new ConvertError(LOAD_FAILED);
     throw new ConvertError('이미지를 열 수 없습니다. 지원하지 않는 형식이거나 손상된 파일입니다.');
   }
 }
@@ -305,6 +319,7 @@ async function openPdf(file) {
   } catch (e) {
     task.destroy().catch(() => {});
     if (e?.name === 'PasswordException') throw new ConvertError('암호가 걸린 PDF는 변환할 수 없습니다.');
+    if (isLoadFailure(e)) throw new ConvertError(LOAD_FAILED); // PDF.js 작업 파일을 못 받은 경우
     throw new ConvertError('PDF를 열 수 없습니다. 손상된 파일일 수 있습니다.');
   }
 }
@@ -519,7 +534,7 @@ function loadOffice(status) {
       stopOffice();
       if (e instanceof ConvertError || e === OFFICE_STALLED) throw e;
       console.error(e);
-      throw new ConvertError('문서 변환 엔진을 불러오지 못했습니다. 인터넷 연결을 확인하고 다시 시도해 주세요.');
+      throw new ConvertError('문서 변환 엔진을 불러오지 못했습니다. 인터넷 연결을 확인하고 페이지를 새로고침해 주세요.');
     });
   }
   return officePromise;

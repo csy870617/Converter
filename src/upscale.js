@@ -86,7 +86,7 @@ function loadEngine(status) {
     enginePromise = null;
     if (e instanceof ConvertError) throw e;
     console.error(e);
-    throw new ConvertError('AI를 준비하지 못했습니다. 인터넷 연결을 확인하고 다시 시도해 주세요.');
+    throw new ConvertError('AI를 준비하지 못했습니다. 인터넷 연결을 확인하고 페이지를 새로고침해 주세요.');
   });
   return enginePromise;
 }
