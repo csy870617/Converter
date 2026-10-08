@@ -140,7 +140,7 @@ for (const [inputs, target, expected, width, codec, strong] of CASES) {
       await page.click('#go');
       await page.waitForSelector('#msg.err', { timeout: 600000 });
       const msg = await page.textContent('#msg');
-      if (/알 수 없는 오류/.test(msg)) throw new Error(`안내 문구가 불친절함: ${msg}`);
+      if (/변환 중 문제가 생겼습니다/.test(msg)) throw new Error(`원인을 알려 주지 못하는 안내 문구: ${msg}`);
       console.log(`✔ ${label}  → 오류 안내: ${msg.split('\n')[0]}`);
       continue;
     }
@@ -159,6 +159,10 @@ for (const [inputs, target, expected, width, codec, strong] of CASES) {
     if (name !== expected) throw new Error(`파일 이름이 ${name} (기대: ${expected})`);
     if (!buf.length || !MAGIC[ext]?.(buf)) throw new Error(`${name} 내용이 올바르지 않음`);
     if (width && imageWidth(buf) !== width) throw new Error(`${name} 가로 크기가 ${imageWidth(buf)} (기대: ${width})`);
+    // MP4 결과는 어디서나 재생되는 코덱(H.264, 아이폰 영상은 HEVC)이어야 한다 (VP9 시험은 제외)
+    if (ext === 'mp4' && codec !== 'vp9' && !/avc1|hvc1/.test(buf.subarray(0, 1 << 20).toString('latin1'))) {
+      throw new Error(`${name}이(가) 재생 호환 코덱(H.264)이 아님`);
+    }
     const msg = await page.textContent('#msg');
     if (!msg.startsWith('완료')) throw new Error(`메시지: ${msg}`);
     console.log(`✔ ${label}  (${((Date.now() - started) / 1000).toFixed(1)}s, ${buf.length} bytes)`);
