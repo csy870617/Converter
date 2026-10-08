@@ -1,6 +1,6 @@
 import './style.css';
 import { CATEGORIES, ConvertError, MIME, UPSCALE, categoryOf, extOf, targetLabel, targetsFor } from './formats.js';
-import { convertFile, imagesToPdf, officeSupported } from './engines.js';
+import { LOAD_FAILED, convertFile, imagesToPdf, isLoadFailure, officeSupported } from './engines.js';
 
 // ---------------------------------------------------------------------------
 // 화면
@@ -198,6 +198,8 @@ async function run() {
   const errors = [];
   const merge = !$('mergeRow').classList.contains('hidden') && $('merge').checked;
   const jobs = merge ? [{ files, label: `사진 ${files.length}장` }] : files.map((f) => ({ files: [f], label: f.name }));
+  // 여러 개면 끝에 ZIP으로 묶는다. 묶는 도구를 미리 받아 둔다 (긴 변환 중에 인터넷이 끊겨도 묶을 수 있게)
+  if (jobs.length > 1) import('fflate').catch(() => {});
 
   for (const [i, job] of jobs.entries()) {
     const prefix = jobs.length > 1 ? `(${i + 1}/${jobs.length}) ` : '';
@@ -218,7 +220,8 @@ async function run() {
       setState('완료', 'ok');
     } catch (e) {
       console.error(e);
-      const text = e instanceof ConvertError ? e.message : '변환 중 문제가 생겼습니다. 다시 시도해 주세요.';
+      const text = e instanceof ConvertError ? e.message
+        : isLoadFailure(e) ? LOAD_FAILED : '변환 중 문제가 생겼습니다. 다시 시도해 주세요.';
       errors.push(`${job.label}: ${text}`);
       setState('실패', 'err');
     }
@@ -233,7 +236,14 @@ async function run() {
     return;
   }
   const single = results.length === 1;
-  const link = single ? download(results[0].name, results[0].blob) : download('변환결과.zip', await zipResults(results));
+  let link;
+  try {
+    link = single ? download(results[0].name, results[0].blob) : download('변환결과.zip', await zipResults(results));
+  } catch (e) {
+    console.error(e);
+    setMsg(isLoadFailure(e) ? LOAD_FAILED : '결과 파일을 묶지 못했습니다. 다시 시도해 주세요.', 'err');
+    return;
+  }
   const press = link.auto ? '' : ' 아래 버튼을 눌러 받으세요.';
   let text = single ? `완료!${press}` : `완료! 파일 ${results.length}개를 ZIP으로 묶었습니다.${press}`;
   if (errors.length) text = `일부만 완료됐습니다. (완료 ${jobs.length - errors.length}개 · 실패 ${errors.length}개)${press}\n\n${errors.join('\n')}`;

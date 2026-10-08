@@ -13,10 +13,12 @@ const PREFIX = '/Converter/';
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css',
   '.wasm': 'application/wasm', '.png': 'image/png', '.json': 'application/json', '.gz': 'application/gzip' };
 
+let block = null; // 이름이 맞는 파일은 받지 못하게 한다 (인터넷이 끊긴 상황 시험)
 const server = http.createServer((req, res) => {
   let p = decodeURIComponent(new URL(req.url, 'http://x').pathname);
   if (!p.startsWith(PREFIX)) { res.writeHead(404).end(); return; }
   p = p.slice(PREFIX.length) || 'index.html';
+  if (block?.test(p)) { res.writeHead(503).end(); return; }
   const file = path.join(root, p);
   if (!file.startsWith(root) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) { res.writeHead(404).end(); return; }
   res.writeHead(200, { 'Content-Type': TYPES[path.extname(file)] || 'application/octet-stream' });
@@ -170,6 +172,36 @@ for (const [inputs, target, expected, width, codec, strong] of CASES) {
     failed++;
     const msg = await page.textContent('#msg').catch(() => '');
     console.log(`✘ ${label}: ${e.message.split('\n')[0]}\n   화면 메시지: ${msg}`);
+  }
+}
+// 인터넷이 끊겨 필요한 파일(여기서는 HEIC 해독기)을 못 받으면 '손상된 파일'이 아니라 새로고침하라고 안내하고,
+// 새로고침하면 다시 되어야 한다 (브라우저는 못 받은 파일을 기억해서 새로고침 전에는 계속 실패한다)
+if (!only || only.test('인터넷 끊김')) {
+  const label = '인터넷 끊김 → 새로고침 안내';
+  const pick = async () => {
+    await page.setInputFiles('#picker', [{ name: '아이폰.heic', mimeType: 'application/octet-stream', buffer: fs.readFileSync(path.join(fixtures, '아이폰.heic')) }]);
+    await page.getByRole('button', { name: 'JPG', exact: true }).click();
+  };
+  try {
+    await page.reload();
+    block = /^assets\/heic-to-/;
+    await pick();
+    await page.click('#go');
+    await page.waitForSelector('#msg.err', { timeout: 60000 });
+    const msg = await page.textContent('#msg');
+    if (!/새로고침/.test(msg)) throw new Error(`새로고침 안내가 없음: ${msg}`);
+    block = null;
+    await page.reload();
+    await pick();
+    const downloading = page.waitForEvent('download', { timeout: 120000 });
+    await page.click('#go');
+    if ((await downloading).suggestedFilename() !== '아이폰.jpg') throw new Error('새로고침 뒤 변환 결과가 없음');
+    console.log(`✔ ${label}  → ${msg.split('\n')[0]}`);
+  } catch (e) {
+    failed++;
+    console.log(`✘ ${label}: ${e.message.split('\n')[0]}`);
+  } finally {
+    block = null;
   }
 }
 if (pageErrors.length) { failed++; console.log('페이지 오류:', pageErrors); }
