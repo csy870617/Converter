@@ -3,29 +3,6 @@ import { CATEGORIES, ConvertError, MIME, UPSCALE, categoryOf, extOf, targetLabel
 import { convertFile, imagesToPdf, officeSupported } from './engines.js';
 
 // ---------------------------------------------------------------------------
-// 서비스 워커: 문서 변환에 필요한 보안 헤더를 붙인다. 처음 방문 때 한 번 새로고침된다.
-// ---------------------------------------------------------------------------
-async function setupServiceWorker() {
-  if (!('serviceWorker' in navigator) || !window.isSecureContext) return;
-  try {
-    await navigator.serviceWorker.register('./sw.js');
-    await navigator.serviceWorker.ready;
-    if (!self.crossOriginIsolated) {
-      // 무한 새로고침을 막기 위해 한 번만 시도한다
-      if (!sessionStorage.getItem('sw-reloaded')) {
-        sessionStorage.setItem('sw-reloaded', '1');
-        location.reload();
-      }
-    } else {
-      sessionStorage.removeItem('sw-reloaded');
-    }
-  } catch (e) {
-    console.warn('서비스 워커 등록 실패', e);
-  }
-}
-setupServiceWorker();
-
-// ---------------------------------------------------------------------------
 // 화면
 // ---------------------------------------------------------------------------
 const $ = (id) => document.getElementById(id);
@@ -49,7 +26,7 @@ function usableFiles() {
 }
 
 function addFiles(list) {
-  if (state.busy) return;
+  if (state.busy || !list.length) return; // 파일이 아닌 것(글자 등)을 놓았을 때는 아무것도 바꾸지 않는다
   for (const f of list) {
     if (!state.files.some((x) => x.name === f.name && x.size === f.size && x.lastModified === f.lastModified)) {
       state.files.push(f);
@@ -111,6 +88,7 @@ function render() {
     }
     const b = document.createElement('button');
     b.className = `fmt${t === state.target ? ' on' : ''}`;
+    b.setAttribute('aria-pressed', String(t === state.target));
     b.textContent = targetLabel(t);
     if (UPSCALE[t]) b.classList.add('ai');
     b.disabled = state.busy;
@@ -240,7 +218,7 @@ async function run() {
       setState('완료', 'ok');
     } catch (e) {
       console.error(e);
-      const text = e instanceof ConvertError ? e.message : `알 수 없는 오류가 발생했습니다. (${e?.message || e})`;
+      const text = e instanceof ConvertError ? e.message : '변환 중 문제가 생겼습니다. 다시 시도해 주세요.';
       errors.push(`${job.label}: ${text}`);
       setState('실패', 'err');
     }
@@ -256,10 +234,9 @@ async function run() {
   }
   const single = results.length === 1;
   const link = single ? download(results[0].name, results[0].blob) : download('변환결과.zip', await zipResults(results));
-  let text = single
-    ? `완료!${link.auto ? '' : ' 아래 버튼을 눌러 받으세요.'}`
-    : `완료! 파일 ${results.length}개를 ZIP으로 묶었습니다.${link.auto ? '' : ' 아래 버튼을 눌러 받으세요.'}`;
-  if (errors.length) text += `\n\n실패한 파일:\n${errors.join('\n')}`;
+  const press = link.auto ? '' : ' 아래 버튼을 눌러 받으세요.';
+  let text = single ? `완료!${press}` : `완료! 파일 ${results.length}개를 ZIP으로 묶었습니다.${press}`;
+  if (errors.length) text = `일부만 완료됐습니다. (완료 ${jobs.length - errors.length}개 · 실패 ${errors.length}개)${press}\n\n${errors.join('\n')}`;
   setMsg(text, errors.length ? 'err' : 'ok', link);
 }
 
@@ -315,7 +292,36 @@ for (const ev of ['dragleave', 'drop']) window.addEventListener(ev, (e) => { e.p
 window.addEventListener('drop', (e) => addFiles([...(e.dataTransfer?.files || [])]));
 window.addEventListener('paste', (e) => { if (e.clipboardData?.files.length) addFiles([...e.clipboardData.files]); });
 $('go').onclick = run;
-window.addEventListener('beforeunload', (e) => { if (state.busy) e.preventDefault(); });
+window.addEventListener('beforeunload', (e) => {
+  if (!state.busy) return;
+  e.preventDefault();
+  e.returnValue = ''; // 일부 브라우저는 이 값이 있어야 "나가시겠습니까?"를 묻는다
+});
+
+// ---------------------------------------------------------------------------
+// 서비스 워커: 문서 변환에 필요한 보안 헤더를 붙인다. 처음 방문 때 한 번 새로고침된다.
+// ---------------------------------------------------------------------------
+async function setupServiceWorker() {
+  if (!('serviceWorker' in navigator) || !window.isSecureContext) return;
+  try {
+    await navigator.serviceWorker.register('./sw.js');
+    await navigator.serviceWorker.ready;
+    if (!self.crossOriginIsolated) {
+      // 그새 파일을 골랐으면 새로고침하지 않는다 (고른 파일이 사라지므로). 문서 변환 때 새로고침을 안내한다.
+      if (state.files.length || state.busy) return;
+      // 무한 새로고침을 막기 위해 한 번만 시도한다
+      if (!sessionStorage.getItem('sw-reloaded')) {
+        sessionStorage.setItem('sw-reloaded', '1');
+        location.reload();
+      }
+    } else {
+      sessionStorage.removeItem('sw-reloaded');
+    }
+  } catch (e) {
+    console.warn('서비스 워커 등록 실패', e);
+  }
+}
 
 if (!officeSupported()) console.info('crossOriginIsolated=false: 문서 변환은 서비스 워커 적용 후 가능');
 render();
+setupServiceWorker();

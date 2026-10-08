@@ -6,7 +6,7 @@
 // 그래서 AI가 없는 무늬를 지어내거나 얼굴·글자·색을 바꾸는 왜곡이 크게 줄어든다.
 // 모델을 고른 근거와 측정 결과는 scripts/model/README.md 참고.
 import { ConvertError, extOf, stemOf } from './formats.js';
-import { MAX_PIXELS, asset, bigAsset, canvasBlob, decodeImage, loadFFmpegThreaded, out } from './engines.js';
+import { MAX_PIXELS, asset, bigAsset, canvasBlob, decodeImage, loadFFmpegThreaded, makeCanvas, out } from './engines.js';
 
 const MODEL = { file: 'models/fidelity-x4.onnx', half: 'models/fidelity-x4-fp16.onnx', size: '5MB' };
 // 원본과 얼마나 엄격하게 맞출지. 무손실 원본(PNG 등)은 그대로 맞추고, 손실 압축 원본(JPEG·동영상)은
@@ -21,6 +21,9 @@ const fidelityFor = (lossless, strong) => ({ ...(lossless ? STRICT : LOSSY), sha
 const suffix = (scale, strong) => `_고화질${scale}배${strong ? '_강하게' : ''}`;
 const PAD = 16; // 타일 경계가 티 나지 않도록 주변을 겹쳐서 계산한다
 const WHOLE = 400_000; // 그래픽카드에서는 이 화소 수까지 한 번에 계산한다 (조각내면 느려진다)
+// 그래픽카드 안에서 그림으로 바꾸는 방식은 4배 결과 전체를 한 번에 담으므로 이 크기까지만 쓴다
+// (1080p 영상의 4배 = 약 3,300만 화소). 더 크면 조각마다 가져온다.
+const PAINT_MAX = 36_000_000;
 
 let ortPromise = null;
 let enginePromise = null;
@@ -82,16 +85,10 @@ function loadEngine(status) {
   })().catch((e) => {
     enginePromise = null;
     if (e instanceof ConvertError) throw e;
-    throw new ConvertError(`AI 모델을 불러오지 못했습니다. (${e?.message || e})`);
+    console.error(e);
+    throw new ConvertError('AI를 준비하지 못했습니다. 인터넷 연결을 확인하고 다시 시도해 주세요.');
   });
   return enginePromise;
-}
-
-function makeCanvas(w, h) {
-  const c = document.createElement('canvas');
-  c.width = w;
-  c.height = h;
-  return c;
 }
 
 /**
@@ -125,19 +122,39 @@ class GpuPainter {
     this.readback = null;
   }
 
-  /** w×h 크기의 그림판을 준비한다. 그래픽카드 한도를 넘으면 false. */
+  /**
+   * w×h 크기의 그림판을 준비한다. 너무 크면(그래픽카드·브라우저 한도) false.
+   * 그림판·가져올 버퍼·캔버스는 크기가 같으면 다시 쓴다 (동영상 장면마다 큰 메모리를 새로 잡지 않게).
+   */
   begin(w, h) {
-    if (w > this.device.limits.maxTextureDimension2D || h > this.device.limits.maxTextureDimension2D) return false;
+    const max = this.device.limits.maxTextureDimension2D;
+    if (w > max || h > max || w * h > PAINT_MAX || this.tooBig === `${w}x${h}`) return false;
     if (!this.texture || this.texture.width !== w || this.texture.height !== h) {
-      this.texture?.destroy();
+      this.release();
+      const row = Math.ceil((w * 4) / 256) * 256; // 그래픽카드에서 가져올 때 줄 길이는 256바이트 단위
+      const full = makeCanvas(row / 4, h);
+      if (full.width !== row / 4 || full.height !== h) {
+        this.tooBig = `${w}x${h}`; // 이 브라우저(아이폰 사파리 등)는 이렇게 큰 캔버스를 못 쓴다. 다음 장면부터는 바로 조각 방식으로.
+        return false;
+      }
+      this.row = row;
+      this.full = full;
+      this.image = new ImageData(row / 4, h);
       this.texture = this.device.createTexture({
         size: [w, h], format: 'rgba8unorm', usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.COPY_SRC,
       });
-      this.readback?.destroy();
-      this.row = Math.ceil((w * 4) / 256) * 256; // 그래픽카드에서 가져올 때 줄 길이는 256바이트 단위
-      this.readback = this.device.createBuffer({ size: this.row * h, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+      this.readback = this.device.createBuffer({ size: row * h, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
     }
     return true;
+  }
+
+  release() {
+    this.texture?.destroy();
+    this.readback?.destroy();
+    this.texture = null;
+    this.readback = null;
+    this.full = null;
+    this.image = null;
   }
 
   /** AI 결과 조각(tw×th)에서 (sx,sy)부터 cw×ch만큼을 그림판 (dx,dy)에 그린다. */
@@ -161,16 +178,17 @@ class GpuPainter {
     device.queue.submit([enc.finish()]);
   }
 
-  /** 다 그린 그림판을 가져온다. 줄 끝의 빈칸 때문에 그림 폭은 실제보다 넓을 수 있다. */
+  /** 다 그린 그림판을 캔버스로 가져온다. 줄 끝의 빈칸 때문에 캔버스 폭은 실제보다 넓을 수 있다. */
   async finish() {
     const { width, height } = this.texture;
     const enc = this.device.createCommandEncoder();
     enc.copyTextureToBuffer({ texture: this.texture }, { buffer: this.readback, bytesPerRow: this.row }, [width, height]);
     this.device.queue.submit([enc.finish()]);
     await this.readback.mapAsync(GPUMapMode.READ);
-    const img = new ImageData(new Uint8ClampedArray(this.readback.getMappedRange().slice(0)), this.row / 4, height);
+    this.image.data.set(new Uint8Array(this.readback.getMappedRange()));
     this.readback.unmap();
-    return img;
+    this.full.getContext('2d').putImageData(this.image, 0, 0);
+    return this.full;
   }
 }
 
@@ -251,12 +269,7 @@ async function enhance({ data, width: W, height: H, channels }, outW, outH, engi
       await onTile?.(r * cols + c + 1, rows * cols);
     }
   }
-  if (onGpu) {
-    const img = await painter.finish();
-    const full = makeCanvas(img.width, img.height);
-    full.getContext('2d').putImageData(img, 0, 0);
-    rctx.drawImage(full, 0, 0, W * 4, H * 4, 0, 0, outW, outH);
-  }
+  if (onGpu) rctx.drawImage(await painter.finish(), 0, 0, W * 4, H * 4, 0, 0, outW, outH);
   return result;
 }
 
@@ -289,12 +302,19 @@ const nextFrame = () => new Promise((r) => setTimeout(r, 0)); // 화면이 멈�
 export async function upscaleImage(file, scale, { status, progress, strong }) {
   const bitmap = await decodeImage(file);
   const engine = await loadEngine(status);
-  const W = bitmap.width;
-  const H = bitmap.height;
-  const [w, h] = fitSize(W, H, scale, MAX_PIXELS);
-  const src = makeCanvas(W, H).getContext('2d', { willReadFrequently: true });
-  src.drawImage(bitmap, 0, 0);
+  // 아주 큰 사진은 이 브라우저가 다룰 수 있는 크기로 줄여서 읽는다 (아이폰 사파리는 약 1,670만 화소까지)
+  const srcCanvas = makeCanvas(bitmap.width, bitmap.height);
+  const W = srcCanvas.width;
+  const H = srcCanvas.height;
+  const src = srcCanvas.getContext('2d', { willReadFrequently: true });
+  src.drawImage(bitmap, 0, 0, W, H);
   const pixels = src.getImageData(0, 0, W, H).data;
+  // 결과는 원하는 배율로 키우되, 너무 크면 가능한 만큼만 (원본보다 작아지지는 않게)
+  const k = Math.max(1, Math.min(scale, Math.sqrt(MAX_PIXELS / (W * H))));
+  const result = makeCanvas(Math.round(W * k), Math.round(H * k));
+  const w = Math.max(W, result.width);
+  const h = Math.max(H, result.height);
+  if (result.width !== w || result.height !== h) { result.width = w; result.height = h; }
   const ext = extOf(file.name);
   const fidelity = fidelityFor(LOSSLESS.includes(ext), strong);
 
@@ -305,14 +325,14 @@ export async function upscaleImage(file, scale, { status, progress, strong }) {
     status(`화질 높이는 중… ${w}×${h}${how}${timeLeft(started, i, n)}`);
     progress(i / n);
     await nextFrame();
-  });
+  }, result);
 
   // 투명한 부분이 있으면 원본의 투명도를 그대로 살린다
   let transparent = false;
   for (let p = 3; p < pixels.length; p += 4) if (pixels[p] < 255) { transparent = true; break; }
   if (transparent) {
     const rctx = canvas.getContext('2d');
-    const alpha = makeCanvas(w, h).getContext('2d', { willReadFrequently: true });
+    const alpha = makeCanvas(w, h, w * h).getContext('2d', { willReadFrequently: true });
     alpha.imageSmoothingQuality = 'high';
     alpha.drawImage(bitmap, 0, 0, w, h);
     const a = alpha.getImageData(0, 0, w, h).data;
@@ -409,7 +429,7 @@ async function upscaleVideoWebCodecs(file, scale, { status, progress, strong }) 
     const reader = makeCanvas(W, H).getContext('2d', { willReadFrequently: true });
     const upscaler = frameUpscaler(engine, ow, oh, fidelityFor(false, strong), async () => {
       done++;
-            status(`화질 높이는 중… ${done}/${Math.max(done, total)}장면${how}${timeLeft(started, done, Math.max(done, total))}`);
+      status(`화질 높이는 중… ${done}/${Math.max(done, total)}장면${how}${timeLeft(started, done, Math.max(done, total))}`);
       progress(Math.min(0.99, done / total));
       await nextFrame();
     });
@@ -504,8 +524,8 @@ async function upscaleVideoFFmpeg(file, scale, { status, progress, strong }) {
   const log = [];
   const onLog = ({ message }) => { log.push(message); if (log.length > 200) log.shift(); };
   const fail = (msg) => {
-    const reason = log.filter((l) => /error|invalid/i.test(l)).slice(-2).join('\n');
-    return new ConvertError(`${msg}${reason ? `\n(${reason})` : ''}`);
+    console.warn('ffmpeg 기록', log.join('\n'));
+    return new ConvertError(msg);
   };
   let encoder = null;
 
@@ -546,7 +566,7 @@ async function upscaleVideoFFmpeg(file, scale, { status, progress, strong }) {
     const upscaler = frameUpscaler(engine, ow, oh, fidelityFor(false, strong), async () => {
       done++;
       progress(Math.min(0.99, done / total));
-            status(`화질 높이는 중… ${done}/${Math.max(done, total)}장면${how}${timeLeft(started, done, Math.max(done, total))}`);
+      status(`화질 높이는 중… ${done}/${Math.max(done, total)}장면${how}${timeLeft(started, done, Math.max(done, total))}`);
       await nextFrame();
     });
     for (let k = 0; ; k++) {
