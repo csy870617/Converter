@@ -1,6 +1,7 @@
 // 실제 변환 엔진. 모든 변환은 브라우저 안에서 이루어지며 파일은 어디로도 전송되지 않는다.
 // 무거운 엔진(ffmpeg, LibreOffice, PDF.js 등)은 필요할 때 처음 한 번만 불러온다.
 import { ConvertError, MIME, UPSCALE, categoryOf, extOf, stemOf } from './formats.js';
+import { localFontsFor } from './localfonts.js';
 
 export const asset = (path) => new URL(path, document.baseURI).href;
 
@@ -26,6 +27,26 @@ export function bigAsset(path) {
     })().catch((e) => { bigAssets.delete(path); throw e; }));
   }
   return bigAssets.get(path);
+}
+
+// 서비스 워커가 알려 주는 큰 파일 내려받기 진행 상황. 엔진이 직접 받는 파일은 이것으로만 알 수 있다.
+const downloads = new Map(); // 경로 → {loaded, total}
+let onDownload = () => {};
+navigator.serviceWorker?.addEventListener('message', (e) => {
+  if (e.data?.type !== 'download') return;
+  downloads.set(e.data.path, e.data);
+  onDownload(e.data.path);
+});
+
+/** 받는 중인 파일들의 진행률 (0~1, 아직 크기를 모르면 null) */
+function downloadedPart(paths) {
+  let loaded = 0;
+  let total = 0;
+  for (const p of paths) {
+    const d = downloads.get(p);
+    if (d?.total) { loaded += d.loaded; total += d.total; }
+  }
+  return total ? loaded / total : null;
 }
 
 export const out = (name, ext, data) => ({ name: `${name}.${ext}`, blob: data instanceof Blob ? data : new Blob([data], { type: MIME[ext] }) });
@@ -468,9 +489,12 @@ async function convertPdf(file, target, ctx) {
 // 문서 (LibreOffice WebAssembly)
 // ---------------------------------------------------------------------------
 
-const FONTS = ['NanumGothic-Regular.ttf', 'NanumGothic-Bold.ttf', 'NanumMyeongjo-Regular.ttf', 'NanumMyeongjo-Bold.ttf'];
+// fc_local.conf: 글꼴 대체표 (한글 글꼴 이름 → 나눔 글꼴 등). 엔진의 같은 이름 파일을 덮어쓴다.
+const LO_FILES = ['lo/soffice.wasm', 'lo/soffice.data'];
+const FONTS = ['NanumGothic-Regular.ttf', 'NanumGothic-Bold.ttf', 'NanumMyeongjo-Regular.ttf', 'NanumMyeongjo-Bold.ttf', 'fc_local.conf'];
 let officePromise = null;
 let officeConverter = null;
+const officeLocalFonts = []; // 엔진에 넣은 '내 컴퓨터 글꼴' ({filename, data, id})
 let officeReport = () => {}; // 엔진이 보내는 진행 소식을 지금 하는 일(준비/변환)에 맞게 보여준다
 let officeHeard = 0; // 엔진에게서 마지막으로 소식을 들은 시각
 
@@ -503,7 +527,13 @@ function watchOffice(promise, limit) {
   });
 }
 
-function loadOffice(status) {
+function loadOffice(status, localFonts = []) {
+  // 처음 보는 '내 컴퓨터 글꼴'이 필요하면 엔진을 그 글꼴까지 넣어 새로 띄운다 (글꼴은 시작할 때만 넣을 수 있다)
+  const fresh = localFonts.filter((f) => !officeLocalFonts.some((o) => o.id === f.id));
+  if (fresh.length) {
+    officeLocalFonts.push(...fresh);
+    if (officePromise) stopOffice();
+  }
   if (!officeSupported()) {
     // 서비스 워커는 준비됐는데 아직 적용 전이면(처음 방문 직후 파일을 바로 고른 경우) 새로고침하면 된다
     let reloaded = false;
@@ -519,8 +549,10 @@ function loadOffice(status) {
       const { WorkerBrowserConverter } = await import('@matbee/libreoffice-converter/browser');
       const fonts = await Promise.all(FONTS.map(async (filename) => {
         const res = await fetch(asset(`fonts/${filename}`));
+        if (!res.ok) throw new ConvertError(LOAD_FAILED);
         return { filename, data: new Uint8Array(await res.arrayBuffer()) };
       }));
+      fonts.push(...officeLocalFonts.map(({ filename, data }) => ({ filename, data })));
       const converter = new WorkerBrowserConverter({
         sofficeJs: asset('lo/soffice.js'),
         sofficeWasm: await bigAsset('lo/soffice.wasm'),
@@ -531,8 +563,20 @@ function loadOffice(status) {
         onProgress: (info) => { officeHeard = Date.now(); officeReport(info); },
       });
       officeConverter = converter;
-      // 처음 받을 때는 내려받는 동안 소식이 계속 오므로, 2분 동안 아무 소식이 없을 때만 멈춘 것으로 본다
-      await watchOffice(converter.initialize(), () => 120_000);
+      // 처음엔 엔진 파일(약 80MB)을 받는다. 받는 동안은 서비스 워커가 진행 상황을 알려 주므로
+      // 받기가 멈추거나 엔진이 1분 동안 아무 소식이 없을 때만 멈춘 것으로 본다
+      let shown = 0;
+      onDownload = (path) => {
+        if (!LO_FILES.includes(path)) return;
+        officeHeard = Date.now();
+        shown = Math.max(shown, Math.round((downloadedPart(LO_FILES) ?? 0) * 100));
+        status(`준비 중… 엔진 받는 중 ${shown}%`);
+      };
+      try {
+        await watchOffice(converter.initialize(), () => 60_000);
+      } finally {
+        onDownload = () => {};
+      }
       // '준비 완료' 직후 바로 문서를 열면 LibreOffice가 자주 멈춘다(시험: 24번 중 13번). 5초 쉬면 한 번도
       // 멈추지 않았다(24번 중 0번). 처음 한 번만 기다리고, 그래도 멈추면 아래 감시가 다시 시작한다.
       status('준비 중… 거의 다 됐어요');
@@ -568,13 +612,16 @@ async function checkDocument(file) {
 
 async function convertOffice(file, target, { status, progress }) {
   await checkDocument(file);
+  // 문서가 쓰는 글꼴이 이 컴퓨터에 있으면(허락한 경우) 그 글꼴로 그린다
+  let localFonts = [];
+  try { localFonts = await localFontsFor([file], status); } catch (e) { console.warn('내 컴퓨터 글꼴을 읽지 못했습니다', e); }
   const data = new Uint8Array(await file.arrayBuffer());
   // 멈추는 곳은 '문서 여는' 단계(진행 30%)다. 평소엔 1~2초라 그 단계에서만 짧게 지켜본다
   // (큰 문서는 크기만큼 늘린다). 그 뒤의 실제 변환은 큰 문서면 오래 걸릴 수 있으니 넉넉히 기다린다.
   const openLimit = 20_000 + (file.size / 1_000_000) * 10_000;
   for (let attempt = 1; ; attempt++) {
     try {
-      const converter = await loadOffice(status);
+      const converter = await loadOffice(status, localFonts);
       status('변환 중…');
       let percent = 0;
       officeReport = (info) => { percent = info.percent; progress(info.percent / 100); };

@@ -1,6 +1,7 @@
 import './style.css';
 import { CATEGORIES, ConvertError, MIME, UPSCALE, categoryOf, extOf, targetLabel, targetsFor } from './formats.js';
 import { LOAD_FAILED, convertFile, imagesToPdf, isLoadFailure, officeSupported } from './engines.js';
+import { localFontsSupported, requestLocalFonts } from './localfonts.js';
 
 // ---------------------------------------------------------------------------
 // 화면
@@ -189,6 +190,8 @@ async function run() {
   const files = usableFiles();
   const target = state.target;
   if (!files.length || !target || state.busy) return;
+  // 문서 변환: 내 컴퓨터 글꼴(맑은 고딕 등)을 쓰도록 허락을 구한다. 버튼을 누른 바로 그때만 물을 수 있다.
+  if (localFontsSupported() && files.some((f) => categoryOf(f.name).engine === 'office')) requestLocalFonts();
 
   clickedAt = performance.now();
   state.busy = true;

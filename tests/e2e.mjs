@@ -128,6 +128,7 @@ const CASES = [
   [['보고서.pdf'], 'docx', '보고서.docx'], // 표·머리글·바닥글(쪽 번호)·한글 띄어쓰기
   [['띄어쓰기없음.pdf'], 'docx', '띄어쓰기없음.docx'], // 띄어쓰기 글자 없이 위치로만 띄운 한글 PDF
   [['2단논문.pdf'], 'docx', '2단논문.docx'],
+  [['내글꼴.docx'], 'pdf', '내글꼴.pdf'], // 내 컴퓨터 글꼴(허락한 경우)로 그리기
   [['사진.jpg'], 'up2', '사진_고화질2배.jpg', 1600],
   [['투명.png'], 'up4', '투명_고화질4배.png'],
   [['작은영상.mp4'], 'up4', '작은영상_고화질4배.mp4'], // 하드웨어 인코더가 없을 때 (ffmpeg 인코딩)
@@ -143,6 +144,14 @@ fs.mkdirSync(outDir, { recursive: true });
 
 const browser = await chromium.launch({ executablePath: process.env.CHROME_PATH || undefined });
 const context = await browser.newContext({ acceptDownloads: true });
+// '내 컴퓨터 글꼴' 시험: 이 컴퓨터에 'Test Local Font'가 깔려 있고 사용을 허락한 것처럼 꾸민다
+const testFont = fs.readFileSync(path.join(fixtures, 'test-local-font.ttf')).toString('base64');
+await context.addInitScript((b64) => {
+  window.queryLocalFonts = async () => [{
+    family: 'Test Local Font', fullName: 'Test Local Font', postscriptName: 'TestLocalFont', style: 'Regular',
+    blob: async () => new Blob([Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))]),
+  }];
+}, testFont);
 const page = await context.newPage();
 const pageErrors = [];
 page.on('pageerror', (e) => pageErrors.push(e.message));
@@ -186,6 +195,7 @@ for (const [inputs, target, expected, width, codec, strong] of CASES) {
     if (name !== expected) throw new Error(`파일 이름이 ${name} (기대: ${expected})`);
     if (!buf.length || !MAGIC[ext]?.(buf)) throw new Error(`${name} 내용이 올바르지 않음`);
     if (width && imageWidth(buf) !== width) throw new Error(`${name} 가로 크기가 ${imageWidth(buf)} (기대: ${width})`);
+    if (name === '내글꼴.pdf' && !buf.includes('TestLocalFont')) throw new Error('내 컴퓨터 글꼴로 그리지 않음');
     if (WORD_CHECKS[name]) {
       const problem = WORD_CHECKS[name](wordParts(buf));
       if (problem) throw new Error(`${name}: ${problem}`);

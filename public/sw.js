@@ -16,12 +16,31 @@ function withIsolation(response, extra = {}) {
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
 
+// 큰 파일을 받는 동안 페이지에 진행 상황을 알린다 (엔진을 띄우는 쪽은 이 파일을 직접 받지 않아 알 길이 없다).
+async function report(path, loaded, total) {
+  for (const client of await self.clients.matchAll({ type: 'window' })) client.postMessage({ type: 'download', path, loaded, total });
+}
+
+function counted(body, rel, total) {
+  let loaded = 0;
+  let last = 0;
+  return body.pipeThrough(new TransformStream({
+    transform(chunk, controller) {
+      loaded += chunk.byteLength;
+      if (Date.now() - last > 250) { last = Date.now(); report(rel, loaded, total); }
+      controller.enqueue(chunk);
+    },
+    flush() { report(rel, loaded, loaded); },
+  }));
+}
+
 async function gunzip(url, rel) {
   const res = await fetch(`${url.href}.gz`);
   if (!res.ok) return res;
   // 서버가 이미 풀어서 보냈다면(Content-Encoding: gzip) 그대로 쓴다.
   const alreadyDecoded = /gzip/i.test(res.headers.get('Content-Encoding') || '');
-  const body = alreadyDecoded ? res.body : res.body.pipeThrough(new DecompressionStream('gzip'));
+  const raw = counted(res.body, rel, alreadyDecoded ? 0 : Number(res.headers.get('Content-Length')) || 0);
+  const body = alreadyDecoded ? raw : raw.pipeThrough(new DecompressionStream('gzip'));
   const type = rel.endsWith('.wasm') ? 'application/wasm' : 'application/octet-stream';
   const headers = new Headers({ 'Content-Type': type });
   return withIsolation(new Response(body, { status: 200, headers }));
