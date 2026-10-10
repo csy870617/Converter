@@ -84,14 +84,23 @@ const WORD_CHECKS = {
     ? null : `한글 띄어쓰기 추정 실패: ${w.paragraphs.filter(Boolean)[0]}`),
   // 한컴 오피스식 촘촘한 표: 열 너비·좁힌 자간이 살아 있어야 Word에서 칸 안의 글이 넘치지 않는다
   '촘촘한표.docx': (w) => {
-    if (w.tables !== 1) return `표가 ${w.tables}개 (기대: 1개)`;
-    const rows = (w.xml.match(/<w:tr[ >]/g) || []).length;
-    const cols = [...w.xml.matchAll(/<w:gridCol w:w="(\d+)"/g)].map((m) => Number(m[1]));
+    const tables = w.xml.split('<w:tbl>').slice(1);
+    if (tables.length !== 2) return `표가 ${tables.length}개 (기대: 2개, 칸 안에 표가 생기면 안 됨)`;
+    const [first, second] = tables;
+    const rows = (first.match(/<w:tr[ >]/g) || []).length;
+    const cols = [...first.matchAll(/<w:gridCol w:w="(\d+)"/g)].map((m) => Number(m[1]));
     if (rows !== 9 || cols.length !== 7) return `표가 ${rows}행 ${cols.length}열 (기대: 9행 7열)`;
     if (!(cols[0] > 1.5 * Math.max(...cols.slice(1, 6)))) return `열 너비가 원본과 다름: ${cols.join(',')}`;
-    if (!/<w:spacing w:val="-/.test(w.xml)) return '좁힌 자간이 빠짐';
+    if (!/<w:spacing w:val="-/.test(first)) return '좁힌 자간이 빠짐';
     if (!w.paragraphs.includes('도·소매업') || !w.paragraphs.includes('전문·과학·기술 서비스업')) return '가운뎃점 낱말에 띄어쓰기가 끼어듦';
     if (!w.paragraphs.includes('(단위: 억 달러, %)')) return '띄어쓰기 추정이 다름';
+    // 오른쪽에 맞춘 두 줄 숫자 칸: 줄을 끊고 오른쪽 맞춤 (들여쓰기로 흉내 내면 Word에서 숫자가 쪼개진다)
+    const cell = second.split('</w:tc>').find((c) => c.includes('>182.6<')) || '';
+    if (!/<w:jc w:val="(right|end)"\/>/.test(cell) || !cell.includes('<w:br/>') || /w:firstLine="[1-9]/.test(cell)) {
+      return '두 줄 숫자 칸이 오른쪽 맞춤 + 줄 끊기가 아님';
+    }
+    if (/w:ascii=""/.test(w.xml)) return '이름이 빈 글꼴이 있음 (이름표 없는 글꼴)';
+    if (/ w:[A-Za-z]+="-?\d+\.\d+"/.test(w.xml)) return 'Word 규격에 맞지 않는 소수 값이 있음';
     return null;
   },
   '두쪽.docx': (w) => (w.paragraphs.some((p) => p.includes('첫째 쪽입니다. 한글 본문이 들어 있습니다.')) ? null : '본문 글이 다름'),
@@ -195,7 +204,7 @@ const CASES = [
   [['보고서.pdf'], 'docx', '보고서.docx'], // 표·머리글·바닥글(쪽 번호)·한글 띄어쓰기
   [['띄어쓰기없음.pdf'], 'docx', '띄어쓰기없음.docx'], // 띄어쓰기 글자 없이 위치로만 띄운 한글 PDF
   [['2단논문.pdf'], 'docx', '2단논문.docx'],
-  [['촘촘한표.pdf'], 'docx', '촘촘한표.docx'], // 한컴 오피스식 촘촘한 표 (좁힌 자간, 가운뎃점)
+  [['촘촘한표.pdf'], 'docx', '촘촘한표.docx'], // 한컴 오피스식 촘촘한 표 (좁힌 자간, 가운뎃점, 두 줄 숫자 칸, 이름표 없는 글꼴)
   [['내글꼴.docx'], 'pdf', '내글꼴.pdf'], // 내 컴퓨터 글꼴(허락한 경우)로 그리기
   [['한자문서.docx'], 'pdf', '한자문서.pdf'], // 나눔 글꼴에 없는 한자
   [['한글문서.hwp'], 'pdf', '한글문서.pdf'], // 한글: 굵은 글씨·한자·기호·표

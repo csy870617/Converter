@@ -10,7 +10,9 @@
 #  5) 제목·글머리표 항목이 다음 문단에 붙는다: 문장부호로 끝나야만 문단을 나눈다.
 
 import logging
+import math
 import re
+import zipfile
 
 import pymupdf
 import pdf2docx
@@ -21,6 +23,7 @@ from pdf2docx.page.RawPageFitz import RawPageFitz
 from pdf2docx.text.Lines import Lines
 from pdf2docx.text.TextSpan import TextSpan
 from pdf2docx.text.TextBlock import TextBlock
+from pdf2docx.common.share import TextAlignment
 from pdf2docx.table.TableBlock import TableBlock
 from pdf2docx.layout.Blocks import Blocks
 from pdf2docx.layout.Column import Column
@@ -395,11 +398,12 @@ ImagesExtractor._hide_page_text_and_images = staticmethod(_hide_page_text_and_im
 FONT_RULES = [
     # 한글 글꼴 (Windows·한컴 오피스 이름)
     (r'malgun|맑은고딕', '맑은 고딕'),
+    # 한컴 오피스에만 있는 글꼴은 Word(윈도)에 늘 있는 글꼴로 (없는 글꼴은 Word가 엉뚱한 글꼴로 그린다. 한글 → Word와 같게)
+    (r'hcrbatang|함초롬바탕', '바탕'), (r'hcrdotum|함초롬돋움', '맑은 고딕'),
     (r'batangche|바탕체', '바탕체'), (r'batang|바탕', '바탕'),
     (r'gulimche|굴림체', '굴림체'), (r'gulim|굴림', '굴림'),
     (r'dotumche|돋움체', '돋움체'), (r'dotum|돋움', '돋움'),
     (r'gungsuh|궁서', '궁서'),
-    (r'hcrbatang|함초롬바탕', '함초롬바탕'), (r'hcrdotum|함초롬돋움', '함초롬돋움'),
     (r'nanumbarungothic|나눔바른고딕', '나눔바른고딕'), (r'nanumsquare|나눔스퀘어', '나눔스퀘어'),
     (r'nanummyeongjo|나눔명조', '나눔명조'), (r'nanumgothiccoding', '나눔고딕코딩'), (r'nanumgothic|나눔고딕', '나눔고딕'),
     (r'applesdgothic|applegothic', '맑은 고딕'), (r'applemyungjo', '바탕'),
@@ -469,6 +473,29 @@ def _set_text_format_patched(self, docx_run):
 KOREAN_FONTS = {'맑은 고딕', '바탕', '바탕체', '굴림', '굴림체', '돋움', '돋움체', '궁서', '함초롬바탕', '함초롬돋움',
                 '나눔고딕', '나눔명조', '나눔바른고딕', '나눔스퀘어', '나눔고딕코딩'}
 TextSpan._set_text_format = _set_text_format_patched
+
+
+def _good_font_name(name):
+    return bool(name and name.strip()) and all((c.isascii() and c.isprintable()) or _CJK.match(c) for c in name)
+
+
+def _process_font_patched(self, fonts):
+    """원본은 PDF에 넣은 글꼴 파일의 이름표에서 글꼴 이름을 다시 읽어 바꾼다. 한컴 오피스 PDF처럼 이름표가 비었거나
+    깨진 글꼴이면 이름이 사라져, Word가 기본 글꼴로 그리고 좁은 표 칸의 숫자가 줄바꿈된다. 그때는 PDF의 이름을 둔다."""
+    for line in self.blocks:
+        for span in line.spans:
+            if not isinstance(span, TextSpan):
+                continue
+            font = fonts.get(span.font)
+            if not font:
+                continue
+            if _good_font_name(font.name):
+                span.font = font.name
+            if font.line_height:
+                span.line_height = font.line_height * span.size
+
+
+RawPage.process_font = _process_font_patched
 
 # ---------------------------------------------------------------------------
 # 5) 문단 나누기: 제목·글머리표 항목·글자 크기가 바뀌는 곳에서도 나눈다
@@ -676,7 +703,9 @@ def _stream_tables(self, min_border_clearance, max_border_width, line_separate_t
             continue
         strokes.sort_in_reading_order()
         table = TableStructure(strokes, **settings).parse(explicit_shadings).to_table_block()
-        if isinstance(self._parent, Cell) and table.num_cols * table.num_rows == 1 and table[0][0].bg_color is None:
+        # 칸 안의 칸 하나짜리 표는 쓸모없다. 원본은 배경색이 있으면 남기는데, 글 뒤의 음영 상자만큼 좁은 표가 되어
+        # 숫자가 줄바꿈된다('161.' / '1'). 버리면 음영은 글자 배경으로 들어간다.
+        if isinstance(self._parent, Cell) and table.num_cols * table.num_rows == 1:
             continue
         if _straddles(table, table_lines):
             continue  # 글줄이 칸 경계에 걸침 → 표가 아니다
@@ -1062,24 +1091,122 @@ TableBlock.make_docx = _table_make_docx_patched
 _cell_make_docx = Cell.make_docx
 
 
+def _strip(line, leading):
+    """글줄의 앞(leading) 또는 뒤 빈칸을 뺀다. (pdf2docx는 다음 줄과 낱말이 붙지 않게 줄 끝 글자에 빈칸을 덧붙여 둔다: '6 ')"""
+    spans = [span for span in line.spans if isinstance(span, TextSpan)]
+    for span in (spans if leading else reversed(spans)):
+        while span.chars:
+            ch = span.chars[0 if leading else -1]
+            text = ch.c.lstrip() if leading else ch.c.rstrip()
+            if text:
+                ch.c = text
+                return
+            span.chars.pop(0 if leading else -1)
+
+
 def _cell_make_docx_patched(self, table, indexes):
     """칸 안 글줄의 앞뒤 빈칸은 뺀다. 이웃 칸 사이의 빈칸이 다음 칸 글 앞에 붙어 오면, 좁은 칸에서 끝 글자가
-    다음 줄로 넘어간다 (예: ' (△13.6)')."""
+    다음 줄로 넘어간다 (예: ' (△13.6)'). 문단의 맨 앞·맨 뒤와 줄을 끊은 자리의 앞뒤만 뺀다
+    (그냥 이어지는 줄 사이 빈칸은 낱말 사이 띄어쓰기라 남겨야 한다)."""
     for block in self.blocks or []:
-        lines = getattr(block, 'lines', None) or []
+        lines = list(getattr(block, 'lines', None) or [])
         if not lines:
             continue
-        # 문단의 맨 앞과 맨 뒤만 (줄 사이 빈칸은 낱말 사이 띄어쓰기라 남겨야 한다)
-        first = [span for span in lines[0].spans if isinstance(span, TextSpan)]
-        last = [span for span in lines[-1].spans if isinstance(span, TextSpan)]
-        while first and first[0].chars and not first[0].chars[0].c.strip():
-            first[0].chars.pop(0)
-        while last and last[-1].chars and not last[-1].chars[-1].c.strip():
-            last[-1].chars.pop()
+        _strip(lines[0], leading=True)
+        _strip(lines[-1], leading=False)
+        for line, following in zip(lines, lines[1:]):
+            if line.line_break:
+                _strip(line, leading=False)
+                _strip(following, leading=True)
     _cell_make_docx(self, table, indexes)
 
 
 Cell.make_docx = _cell_make_docx_patched
+
+_parse_alignment = TextBlock._parse_alignment
+
+
+def _ink(row):
+    """한 줄(조각들)에서 빈칸을 뺀 글자 범위 (x0, x1)"""
+    boxes = [ch.bbox for line in row for span in line.spans if isinstance(span, TextSpan)
+             for ch in span.chars if ch.c.strip()]
+    return (min(b[0] for b in boxes), max(b[2] for b in boxes)) if boxes else None
+
+
+def _parse_alignment_patched(self, bbox, text_direction_param, line_separate_threshold, lines_left_aligned_threshold,
+                             lines_right_aligned_threshold, lines_center_aligned_threshold):
+    """표 칸의 '182.6' 아래 '(△35.4)'처럼 줄마다 낱말 하나인 글은 줄마다 끊고, 맞춘 쪽의 반대편 여백은 없앤다.
+    원본은 오른쪽에 맞춘 두 줄을 '왼쪽 맞춤 + 첫 줄 들여쓰기'로 흉내 내고(첫 줄을 들여 쓴 두 줄 문단과 구별하지 못해서)
+    여백을 글 폭에 딱 맞춰 두어, Word 글꼴이 조금만 넓어도 '182.' / '6'처럼 숫자가 쪼개진다.
+    맞춤은 빈칸을 뺀 글자 범위로 본다 (이웃 칸에서 딸려 온 빈칸 ' (△0.5)' 때문에 맞춤을 못 찾고 탭으로 흉내 내거나,
+    가운데 맞춘 '(△35.4) '를 왼쪽 맞춤 + 들여쓰기로 보지 않게)."""
+    alignment = _parse_alignment(self, bbox, text_direction_param, line_separate_threshold, lines_left_aligned_threshold,
+                                 lines_right_aligned_threshold, lines_center_aligned_threshold)
+    if not self.is_horizontal_text or not isinstance(self.parent, Cell):
+        return alignment  # 표 칸 안의 글만 (칸 글의 앞뒤 빈칸은 빼고 쓴다: _cell_make_docx_patched)
+    rows = self.lines.group_by_physical_rows()
+    if any(len([line for line in row if line.text.strip()]) > 1 for row in rows):
+        return alignment  # 한 줄에 떨어진 글 조각이 여럿: 탭으로 자리를 맞춘다
+    ink = [_ink(row) for row in rows]
+    if not all(ink):
+        return alignment
+    x0s, x1s = [a for a, _ in ink], [b for _, b in ink]
+    d_left, d_right = min(x0s) - bbox[0], bbox[2] - max(x1s)
+    raw = [''.join(line.text for line in row) for row in rows]
+    if len(rows) == 1:
+        # 한 줄: 앞뒤 빈칸(이웃 칸에서 딸려 온 것 등)이 있으면 글자 범위로 다시 본다
+        if raw[0] == raw[0].strip():
+            return alignment
+        if abs(d_left - d_right) / 2 < lines_center_aligned_threshold:
+            alignment = TextAlignment.CENTER
+        elif d_left <= 0.25 * (bbox[2] - bbox[0]):
+            alignment = TextAlignment.LEFT
+        else:
+            alignment = TextAlignment.RIGHT
+        self.left_space, self.right_space = max(0.0, d_left), max(0.0, d_right)
+        return alignment
+    texts = [t.strip() for t in raw]
+    if not all(t and not any(ch.isspace() for ch in t) for t in texts):
+        return alignment
+    centers = [(a + b) / 2 for a, b in ink]
+    left = max(x0s) - min(x0s) <= lines_left_aligned_threshold
+    right = max(x1s) - min(x1s) <= lines_right_aligned_threshold
+    center = max(centers) - min(centers) <= lines_center_aligned_threshold
+    if left and right:  # 줄 폭이 같으면 칸 안의 자리로 정한다
+        alignment = (TextAlignment.CENTER if abs(d_left - d_right) / 2 < lines_center_aligned_threshold
+                     else TextAlignment.LEFT if d_left < d_right else TextAlignment.RIGHT)
+    elif right:
+        alignment = TextAlignment.RIGHT
+    elif center:
+        alignment = TextAlignment.CENTER
+    elif left:
+        alignment = TextAlignment.LEFT
+    else:
+        return alignment
+    self.first_line_space = 0
+    self.left_space = max(0.0, d_left) if alignment == TextAlignment.LEFT else 0.0
+    self.right_space = max(0.0, d_right) if alignment == TextAlignment.RIGHT else 0.0
+    self._hard_rows = True
+    return alignment
+
+
+TextBlock._parse_alignment = _parse_alignment_patched
+
+_parse_line_break = Lines.parse_line_break
+
+
+def _parse_line_break_patched(self, bbox, line_break_width_ratio, line_break_free_space_ratio):
+    _parse_line_break(self, bbox, line_break_width_ratio, line_break_free_space_ratio)
+    if getattr(self.parent, '_hard_rows', False):  # 위: 줄마다 낱말 하나인 글은 줄마다 끊는다
+        rows = self.group_by_physical_rows()
+        for row in rows:
+            for line in row:
+                line.line_break = 0
+        for row in rows[:-1]:
+            row[-1].line_break = 1
+
+
+Lines.parse_line_break = _parse_line_break_patched
 
 # ---------------------------------------------------------------------------
 # 11) 머리글·바닥글: 쪽마다 되풀이되는 위·아래 글줄과 쪽 번호를 Word 머리글·바닥글로
@@ -1302,5 +1429,37 @@ def convert(src, dst, report=lambda p: None, password=None):
     finally:
         root.removeHandler(handler)
         root.setLevel(old_level)
+    _whole_numbers(dst)
     report(1.0)
     return handler.failed
+
+
+_DECIMAL_ATTR = re.compile(rb'( w:([A-Za-z]+)=")(-?\d+\.\d+)(")')
+
+
+def _whole_numbers(path):
+    """Word 파일 규격에서 크기·간격 값은 정수다. pdf2docx는 소수(테두리 굵기 2.88, 자간 -22.4, 표 들여쓰기 15.99 등)를
+    그대로 적어, Word가 '읽을 수 없는 내용이 있다'며 파일을 고치려 들 수 있다. 정수로 고쳐 적는다."""
+    def whole(m):
+        number = float(m.group(3))
+        if m.group(2) == b'val':  # 자간은 내림: 반올림하면 글이 아주 조금 넓어져 줄이 넘어갈 수 있다
+            value = math.floor(number)
+        elif m.group(2) == b'sz':  # 테두리 굵기: 가장 가는 선은 1/4pt(2)
+            value = max(2, round(number))
+        else:
+            value = round(number)
+        return m.group(1) + str(value).encode() + m.group(4)
+
+    with zipfile.ZipFile(path) as z:
+        parts = [(info, z.read(info.filename)) for info in z.infolist()]
+    changed = False
+    for i, (info, data) in enumerate(parts):
+        if info.filename.startswith('word/') and info.filename.endswith('.xml'):
+            fixed = _DECIMAL_ATTR.sub(whole, data)
+            if fixed != data:
+                parts[i], changed = (info, fixed), True
+    if not changed:
+        return
+    with zipfile.ZipFile(path, 'w', zipfile.ZIP_DEFLATED) as z:
+        for info, data in parts:
+            z.writestr(info, data, compress_type=zipfile.ZIP_DEFLATED)
