@@ -178,6 +178,9 @@ def infer_korean_spaces(line):
     for (a, sa), (b, sb) in zip(flat, flat[1:]):
         if a['c'].isspace() or b['c'].isspace():
             continue
+        # 한글 옆 간격만 본다 (영문끼리의 띄어쓰기는 MuPDF가 넣고, 글꼴이 바뀐 영문은 간격이 들쭉날쭉해 기준을 흐린다)
+        if not (_HANGUL.match(a['c']) or _HANGUL.match(b['c'])):
+            continue
         size = max(sa.get('size', 0), sb.get('size', 0)) or 1
         pairs.append(((b['bbox'][0] - a['bbox'][2]) / size, a, sa))
     if len(pairs) < 2:
@@ -206,6 +209,7 @@ def infer_korean_spaces(line):
 
 
 _CJK = re.compile('[\u1100-\u11ff\u3040-\u30ff\u3130-\u318f\u3400-\u9fff\uac00-\ud7a3\uf900-\ufaff]')
+_ALNUM = re.compile(r'[A-Za-z0-9]')
 
 
 def drop_autospace(line):
@@ -224,7 +228,38 @@ def drop_autospace(line):
         if a['c'].isspace() or b['c'].isspace():
             continue
         size = sp.get('size', 0) or 1
-        if (b['bbox'][0] - a['bbox'][2]) / size < 0.6 and bool(_CJK.match(a['c'])) != bool(_CJK.match(b['c'])):
+        # 자동 간격은 한글과 영문·숫자 사이에만 생긴다 (괄호·쉼표 같은 문장 부호 옆의 띄어쓰기는 진짜다)
+        pair = (a['c'], b['c']) if _CJK.match(a['c']) else (b['c'], a['c'])
+        if (b['bbox'][0] - a['bbox'][2]) / size < 0.6 and _CJK.match(pair[0]) and _ALNUM.match(pair[1]):
+            drop.add(id(ch))
+    if drop:
+        for sp in line.get('spans', []):
+            sp['chars'] = [ch for ch in sp.get('chars', []) if id(ch) not in drop]
+
+
+_MIDDLE_DOTS = '·‧∙・ㆍ'
+
+
+def drop_dot_spaces(line):
+    """가운뎃점 옆의 추정 띄어쓰기를 지운다. 점 글자가 자리보다 좁으면 옆이 비어 MuPDF가 띄어쓰기로 보고
+    '도·소매업'이 '도· 소매업'이 된다. 낱말 사이의 점일 때만 (줄 첫머리의 '· 항목' 같은 글머리표는 그대로)."""
+    flat = [(ch, sp) for sp in line.get('spans', []) for ch in sp.get('chars', [])]
+    drop = set()
+    for i in range(1, len(flat) - 1):
+        ch, sp = flat[i]
+        if not (ch.get('_syn') and ch['c'] == ' '):
+            continue
+        a, b = flat[i - 1][0], flat[i + 1][0]
+        if not a['c'].strip() or not b['c'].strip():
+            continue
+        if a['c'] in _MIDDLE_DOTS:
+            word = i >= 2 and flat[i - 2][0]['c'].strip()
+        elif b['c'] in _MIDDLE_DOTS:
+            word = i + 2 < len(flat) and flat[i + 2][0]['c'].strip()
+        else:
+            continue
+        size = sp.get('size', 0) or 1
+        if word and (b['bbox'][0] - a['bbox'][2]) / size < 1.0:
             drop.add(id(ch))
     if drop:
         for sp in line.get('spans', []):
@@ -240,17 +275,26 @@ def tidy_text_blocks(blocks):
                 for ch in span.get('chars', []):
                     if ch.get('c') in PUA_BULLETS:
                         ch['c'] = PUA_BULLETS[ch['c']]
-                    if syn:
+                    # 추정 띄어쓰기가 다음 글자 조각에 섞여 들어가면 조각 표시로는 모른다: 글자마다 표시도 본다
+                    if syn or ch.get('synthetic'):
                         ch['_syn'] = True
         merge_row_pieces(block)
         for line in block.get('lines', []):
             drop_autospace(line)
             infer_korean_spaces(line)
+            drop_dot_spaces(line)
+            horizontal = line.get('dir', (1, 0))[0] > 0.99
             merged = []
             for span in line.get('spans', []):
                 chars = span.get('chars', [])
                 blank = not ''.join(ch.get('c', '') for ch in chars).strip()
-                if merged and (blank or _same_style(merged[-1], span)):
+                if not blank and horizontal:
+                    spacing = char_spacing(span)
+                    if spacing:
+                        span['char_spacing'] = spacing
+                # 자간이 다른 조각은 합치지 않는다 (표의 칸마다 자간이 달라 합치면 평균이 되어 칸을 넘친다)
+                if merged and (blank or (_same_style(merged[-1], span)
+                                         and abs(merged[-1].get('char_spacing', 0) - span.get('char_spacing', 0)) < 0.1)):
                     prev = merged[-1]
                     prev['chars'] = prev.get('chars', []) + chars
                     prev['bbox'] = _union(prev['bbox'], span['bbox'])
@@ -261,6 +305,32 @@ def tidy_text_blocks(blocks):
                 for ch in span.get('chars', []):
                     ch.pop('_syn', None)
     return blocks
+
+
+def char_spacing(span):
+    """자간(글자 사이 간격, pt). 한컴 오피스 문서처럼 글자 사이를 좁히거나 넓힌 글은 Word에서도 같은 폭이 되게 한다.
+    (그대로 두면 Word에서 글이 길어져 좁은 표 칸에서 줄이 넘어간다.) 낱말 사이 빈칸과 칸 건너뛰기는 세지 않는다."""
+    chars = span.get('chars', [])
+    limit = 0.5 * span.get('size', 10)
+    gaps = []
+    for a, b in zip(chars, chars[1:]):
+        if not a.get('c', '').strip() or not b.get('c', '').strip():
+            continue
+        gap = b['origin'][0] - a['origin'][0] - (a['bbox'][2] - a['bbox'][0])
+        if abs(gap) <= limit:
+            gaps.append(gap)
+    if not gaps:
+        return 0.0
+    mean = sum(gaps) / len(gaps)
+    if abs(mean) < 0.15:
+        return 0.0
+    # Word는 마지막 글자 뒤에도 자간을 더하므로 글자 수에 맞춰 나누고, 2% 여유를 둔다
+    # (글꼴이 조금만 넓어도 좁은 칸에서 끝 글자가 다음 줄로 넘어간다)
+    widths = [c['bbox'][2] - c['bbox'][0] for c in chars if c.get('c', '').strip()]
+    spacing = mean * len(gaps) / (len(gaps) + 1) - 0.02 * sum(widths) / len(widths)
+    if mean > 0:
+        spacing = max(0.0, spacing)
+    return round(spacing, 2) if abs(spacing) >= 0.1 else 0.0
 
 
 _preprocess_text = RawPageFitz._preprocess_text
@@ -709,14 +779,50 @@ def _is_figure(text_lines):
     return sum(len(t) for t in texts) <= 300 and len(long_lines) <= max(1, len(texts) // 6)
 
 
-_to_shapes_and_images = Paths.to_shapes_and_images
+# 표 안의 작은 곡선(가운뎃점·글머리 동그라미 등)은 표와 떼어 따로 그림으로 넣는다.
+# 원래는 선으로 된 표 묶음에 곡선이 하나라도 섞이면(닫힌 칸 안에 있지 않으면) 표 전체를 그림으로 만들어,
+# 표가 사라지고 글자만 흩어진다 (예: 보도자료 표의 '도·소매업' 가운뎃점).
+SMALL_CURVE = 6.0  # pt
+
+
+def _to_shapes_and_images(self, min_svg_gap_dx, min_svg_gap_dy, min_w, min_h, clip_image_res_ratio):
+    if self.is_iso_oriented:
+        return self.to_shapes(), []
+    ie = ImagesExtractor(self.parent.page_engine)
+    groups = ie.detect_svg_contours(min_svg_gap_dx, min_svg_gap_dy, min_w, min_h)
+
+    def in_inner(path, contours):
+        return any(pymupdf.Rect(b).contains(path.bbox) for b in contours)
+
+    group_paths = [Paths() for _ in groups]
+    for path in self._instances:
+        for (bbox, inner_bboxes), paths in zip(groups, group_paths):
+            if path.bbox.intersects(bbox):
+                if not in_inner(path, inner_bboxes):
+                    paths.append(path)
+                break
+
+    shapes, images = [], []
+    clip = lambda rect: ie.clip_page_to_dict(bbox=pymupdf.Rect(rect), rm_image=True, clip_image_res_ratio=clip_image_res_ratio)
+    for (bbox, inner_bboxes), paths in zip(groups, group_paths):
+        small = [p for p in paths if not p.is_iso_oriented and max(p.bbox.width, p.bbox.height) <= SMALL_CURVE]
+        rest = Paths()
+        for p in paths:
+            if not any(p is q for q in small):
+                rest.append(p)
+        if len(rest) and rest.is_iso_oriented:  # 표(또는 글자 꾸밈) + 칸 안의 그림 + 작은 곡선
+            shapes.extend(rest.to_shapes())
+            images.extend(clip(b) for b in inner_bboxes)
+            images.extend(clip(pymupdf.Rect(p.bbox) + (-0.5, -0.5, 0.5, 0.5)) for p in small)
+        else:  # 그림
+            images.append(clip(bbox))
+    return shapes, images
 
 
 def _to_shapes_and_images_patched(self, min_svg_gap_dx=15, min_svg_gap_dy=15, min_w=2, min_h=2, clip_image_res_ratio=3.0):
     shapes, images = _to_shapes_and_images(self, min_svg_gap_dx, min_svg_gap_dy, min_w, min_h, clip_image_res_ratio)
     page = self.parent.page_engine
     regions = getattr(self.parent, '_figure_regions', [])
-    lines_by_region = []
     text = page.get_text('dict', flags=pymupdf.TEXT_MEDIABOX_CLIP)
     all_lines = [(pymupdf.Rect(l['bbox']), ''.join(sp['text'] for sp in l['spans']))
                  for b in text.get('blocks', []) if b.get('type') == 0 for l in b.get('lines', [])]
@@ -927,14 +1033,53 @@ Row.make_docx = _row_make_docx_patched
 _table_make_docx = TableBlock.make_docx
 
 
+def _column_widths(block):
+    """칸들의 왼쪽·오른쪽 경계에서 열 너비(pt)를 구한다."""
+    xs = sorted(x for row in block for cell in row
+                if getattr(cell, 'bbox', None) is not None and not cell.bbox.is_empty
+                for x in (cell.bbox.x0, cell.bbox.x1))
+    bounds = []
+    for x in xs:
+        if not bounds or x - bounds[-1] > 0.5:
+            bounds.append(x)
+    return [b - a for a, b in zip(bounds, bounds[1:])]
+
+
 def _table_make_docx_patched(self, table):
     """표 열 너비를 PDF에서 잰 그대로 고정한다. 자동 맞춤이면 Word·LibreOffice가 내용에 맞춰 열 너비를
-    다시 정해, 칸이 몇 개 비어 있는 표에서는 어떤 열이 거의 0이 되어 숫자가 한 글자씩 세로로 늘어선다."""
+    다시 정해, 칸이 몇 개 비어 있는 표에서는 어떤 열이 거의 0이 되어 숫자가 한 글자씩 세로로 늘어선다.
+    고정할 때는 표 격자(열 너비)도 같이 적어야 한다. 비워 두면 모든 열이 같은 너비가 되어 넓은 첫 열의 글이 줄바꿈된다."""
     _table_make_docx(self, table)
     table.autofit = False
+    widths = _column_widths(self)
+    if len(widths) == len(table.columns):
+        for column, width in zip(table.columns, widths):
+            column.width = Pt(width)
 
 
 TableBlock.make_docx = _table_make_docx_patched
+
+_cell_make_docx = Cell.make_docx
+
+
+def _cell_make_docx_patched(self, table, indexes):
+    """칸 안 글줄의 앞뒤 빈칸은 뺀다. 이웃 칸 사이의 빈칸이 다음 칸 글 앞에 붙어 오면, 좁은 칸에서 끝 글자가
+    다음 줄로 넘어간다 (예: ' (△13.6)')."""
+    for block in self.blocks or []:
+        lines = getattr(block, 'lines', None) or []
+        if not lines:
+            continue
+        # 문단의 맨 앞과 맨 뒤만 (줄 사이 빈칸은 낱말 사이 띄어쓰기라 남겨야 한다)
+        first = [span for span in lines[0].spans if isinstance(span, TextSpan)]
+        last = [span for span in lines[-1].spans if isinstance(span, TextSpan)]
+        while first and first[0].chars and not first[0].chars[0].c.strip():
+            first[0].chars.pop(0)
+        while last and last[-1].chars and not last[-1].chars[-1].c.strip():
+            last[-1].chars.pop()
+    _cell_make_docx(self, table, indexes)
+
+
+Cell.make_docx = _cell_make_docx_patched
 
 # ---------------------------------------------------------------------------
 # 11) 머리글·바닥글: 쪽마다 되풀이되는 위·아래 글줄과 쪽 번호를 Word 머리글·바닥글로

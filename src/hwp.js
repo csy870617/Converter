@@ -167,7 +167,7 @@ function glyphOrigin(el) {
 }
 
 /**
- * 띄어쓰기: rhwp의 SVG에는 빈칸 글자가 없다(위치만 띄운다). 쪽의 글 배치 정보에서 빈칸 자리를 찾아
+ * 띄어쓰기 되살리기: rhwp의 SVG에는 빈칸 글자가 없다(위치만 띄운다). 쪽의 글 배치 정보에서 빈칸 자리를 찾아
  * 바로 앞 글자 뒤에 빈칸을 붙인다. 보이는 모양은 같고, PDF에서 글을 복사·검색할 때 띄어쓰기가 살아난다.
  */
 function addSpaces(texts, layout) {
@@ -181,17 +181,49 @@ function addSpaces(texts, layout) {
     for (let i = lo; i < glyphs.length && glyphs[i].x <= x + 1; i++) out.push(glyphs[i]);
     return out;
   };
+  const inLine = (g, run) => g.y >= run.y - 1 && g.y <= run.y + run.h * 1.6 + 1;
   for (const run of layout?.runs || []) {
     const chars = [...(run.text || '')];
     if (!Array.isArray(run.charX) || run.charX.length < chars.length) continue;
-    for (let i = 1; i < chars.length; i++) {
-      if (chars[i] !== ' ' || chars[i - 1] === ' ') continue;
-      const x = run.x + run.charX[i - 1];
-      const g = near(x).find((c) => Math.abs(c.x - x) < 0.8 && c.y >= run.y - 1 && c.y <= run.y + run.h * 1.6 + 1);
+    for (let i = 0; i < chars.length; i++) {
+      if (chars[i] !== ' ' || (i > 0 && chars[i - 1] === ' ')) continue;
+      let g;
+      if (i > 0) {
+        const x = run.x + run.charX[i - 1];
+        g = near(x).find((c) => Math.abs(c.x - x) < 0.8 && inLine(c, run));
+      } else {
+        // 글 조각이 빈칸으로 시작하면(굵은 글씨 뒤 등) 같은 줄에서 바로 왼쪽 글자 뒤에 붙인다
+        const x = run.x + run.charX[0];
+        g = glyphs.filter((c) => c.x < x - 0.5 && c.x > x - 2 * (run.h || 10) && inLine(c, run)).at(-1);
+      }
       if (!g || g.el.textContent.endsWith(' ')) continue;
       g.el.textContent += ' ';
       g.el.setAttribute('xml:space', 'preserve');
     }
+  }
+}
+
+/**
+ * 가운뎃점(·): rhwp는 작은 동그라미로 그리고, 복사용으로 같은 자리에 보이지 않는 글자를 둔다.
+ * Word로 바꿀 때는 동그라미를 지우고 글자를 보이게 한다. (동그라미가 표 안에 있으면 표 전체가 그림이 되고,
+ * Word에서 '도·소매업'의 점이 빠진다)
+ */
+function dotsToText(svg) {
+  const circles = [...svg.querySelectorAll('circle')].filter((c) => (parseFloat(c.getAttribute('r')) || 0) <= 2.5);
+  if (!circles.length) return;
+  for (const el of svg.querySelectorAll('text[fill-opacity="0"]')) {
+    if (!/^[\u00b7\u2219\u30fb\u2022]$/.test(el.textContent)) continue;
+    const [x, y] = glyphOrigin(el);
+    const size = parseFloat(el.getAttribute('font-size')) || 12;
+    const dot = circles.find((c) => {
+      const cx = parseFloat(c.getAttribute('cx'));
+      const cy = parseFloat(c.getAttribute('cy'));
+      return cx >= x - 1 && cx <= x + size && cy <= y + 1 && cy >= y - size;
+    });
+    if (!dot) continue;
+    dot.remove();
+    circles.splice(circles.indexOf(dot), 1);
+    el.removeAttribute('fill-opacity');
   }
 }
 
@@ -239,6 +271,7 @@ async function prepareSvg(svg, layout, forWord) {
   fixMarkers(svg);
   const texts = [...svg.querySelectorAll('text')];
   addSpaces(texts, layout);
+  if (forWord) dotsToText(svg);
   const used = new Map();
   for (const el of texts) {
     // 글자 수를 원래 폭에 맞추는 속성은 글자 하나짜리에서 svg2pdf가 계산을 그르친다(무한대 자간). 위치는 이미 정해져 있다.
