@@ -8,3 +8,4 @@ test-results/
 public/pdfjs/
 .venv/
 __pycache__/
+public/pyodide/

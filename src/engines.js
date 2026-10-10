@@ -383,54 +383,62 @@ function pageParagraphs(items) {
   return paragraphs;
 }
 
-async function pdfToDocx(doc, stem, ctx) {
-  const { Document, Packer, Paragraph, TextRun, ImageRun } = await import('docx');
-  const sections = [];
-  for (let i = 1; i <= doc.numPages; i++) {
-    const page = await doc.getPage(i);
-    const [, , w, h] = page.view;
-    const content = await page.getTextContent();
-    const paragraphs = pageParagraphs(content.items);
-    const children = [];
-    if (paragraphs.length) {
-      for (const p of paragraphs) {
-        children.push(new Paragraph({
-          spacing: { after: Math.round(p.size * 6) },
-          children: [new TextRun({ text: p.text, size: Math.round(Math.min(p.size, 72) * 2) })],
-        }));
+// PDF → Word는 따로 된 작업자(src/pdf2word)에서 pdf2docx로 한다. 처음 한 번 엔진(약 40MB)을 받는다.
+let pdfWorker = null;
+let pdfJob = 0;
+
+function pdfToWord(file, ctx) {
+  ctx.status('준비 중… (처음 한 번 1~2분)');
+  if (!pdfWorker) pdfWorker = new Worker(new URL('./pdf2word/worker.js', import.meta.url), { type: 'module' });
+  const worker = pdfWorker;
+  const id = ++pdfJob;
+  const reset = () => { worker.terminate(); if (pdfWorker === worker) pdfWorker = null; };
+  return new Promise((resolve, reject) => {
+    const done = () => {
+      worker.removeEventListener('message', onMessage);
+      worker.removeEventListener('error', onError);
+    };
+    const onMessage = ({ data: m }) => {
+      if (m.id !== id) return;
+      if (m.type === 'progress') {
+        if (m.stage === 'load') ctx.status(`준비 중… ${Math.round(m.value * 100)}%`);
+        else { ctx.status('변환 중…'); ctx.progress(m.value); }
+      } else if (m.type === 'done') {
+        done();
+        resolve(m);
+      } else if (m.type === 'error') {
+        done();
+        if (m.code === 'load') { reset(); reject(new ConvertError(LOAD_FAILED)); return; }
+        console.warn('PDF→Word 오류', m.message);
+        reject(new ConvertError(m.code === 'password'
+          ? '암호가 걸린 PDF는 변환할 수 없습니다.'
+          : 'PDF를 Word로 바꾸지 못했습니다. 손상되었거나 특수한 PDF일 수 있습니다.'));
       }
-    } else {
-      // 글자가 없는 페이지(스캔본)는 그림으로 넣는다
-      const img = await renderPage(page, 150, 'image/jpeg');
-      const maxW = (w - 72) * 96 / 72;
-      const k = Math.min(1, maxW / img.width, ((h - 72) * 96 / 72) / img.height);
-      children.push(new Paragraph({
-        children: [new ImageRun({
-          type: 'jpg', data: await img.blob.arrayBuffer(),
-          transformation: { width: Math.round(img.width * k), height: Math.round(img.height * k) },
-        })],
-      }));
-    }
-    sections.push({
-      properties: { page: { size: { width: Math.round(w * 20), height: Math.round(h * 20) },
-        margin: { top: 720, bottom: 720, left: 720, right: 720 } } },
-      children,
-    });
-    page.cleanup();
-    ctx.progress(i / doc.numPages);
-  }
-  const document = new Document({
-    styles: { default: { document: { run: { font: { ascii: 'Malgun Gothic', eastAsia: '맑은 고딕', hAnsi: 'Malgun Gothic' } } } } },
-    sections,
+    };
+    const onError = (e) => {
+      done();
+      reset();
+      console.error(e);
+      reject(new ConvertError(LOAD_FAILED));
+    };
+    worker.addEventListener('message', onMessage);
+    worker.addEventListener('error', onError);
+    file.arrayBuffer().then((buffer) => {
+      worker.postMessage({ id, base: new URL('.', document.baseURI).href, buffer }, [buffer]);
+    }, (e) => { done(); reject(e); });
   });
-  return out(stem, 'docx', await Packer.toBlob(document));
 }
 
 async function convertPdf(file, target, ctx) {
-  const { doc, close } = await openPdf(file);
   const stem = stemOf(file.name);
+  if (target === 'docx') {
+    const { buffer, failed } = await pdfToWord(file, ctx);
+    const result = out(stem, 'docx', new Blob([buffer], { type: MIME.docx }));
+    if (failed?.length) result.warning = `${failed.join(', ')}쪽은 변환하지 못해 빠졌습니다.`;
+    return [result];
+  }
+  const { doc, close } = await openPdf(file);
   try {
-    if (target === 'docx') return [await pdfToDocx(doc, stem, ctx)];
     if (target === 'txt') {
       const pages = [];
       for (let i = 1; i <= doc.numPages; i++) {

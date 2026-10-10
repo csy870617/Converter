@@ -6,6 +6,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { chromium } from 'playwright-core';
+import { unzipSync, strFromU8 } from 'fflate';
 
 const root = path.resolve(import.meta.dirname, '..', 'dist');
 const fixtures = path.resolve(import.meta.dirname, 'fixtures');
@@ -46,6 +47,27 @@ const MAGIC = {
   zip: (b) => b.subarray(0, 2).toString() === 'PK',
   txt: (b) => /한글/.test(b.toString('utf8')),
   csv: (b) => /철수/.test(b.toString('utf8')),
+};
+
+// Word 파일 안의 글·표·머리글을 꺼내 내용까지 확인한다
+function wordParts(buf) {
+  const files = unzipSync(new Uint8Array(buf));
+  const text = (xml) => xml.split(/<\/w:p>/).map((p) => [...p.matchAll(/<w:t(?: [^>]*)?>([^<]*)<\/w:t>/g)].map((m) => m[1]).join(''));
+  const doc = strFromU8(files['word/document.xml']);
+  const hf = Object.keys(files).filter((k) => /word\/(header|footer)\d*\.xml/.test(k)).map((k) => strFromU8(files[k]));
+  return { paragraphs: text(doc), tables: (doc.match(/<w:tbl>/g) || []).length, headers: hf.join('\n') };
+}
+const WORD_CHECKS = {
+  '보고서.docx': (w) => {
+    if (!w.paragraphs.includes('2. 주요 성과')) return '제목의 띄어쓰기가 사라짐 (2. 주요 성과)';
+    if (w.tables < 2) return `표가 ${w.tables}개 (기대: 2개 이상)`;
+    if (!/주식회사 한빛/.test(w.headers) || !/ PAGE /.test(w.headers)) return '머리글·쪽 번호 바닥글이 없음';
+    return null;
+  },
+  '띄어쓰기없음.docx': (w) => (w.paragraphs.includes('제 1 조 (목적) 이 규정은 회사의 문서 관리에 필요한 사항을 정한다.')
+    ? null : `한글 띄어쓰기 추정 실패: ${w.paragraphs.filter(Boolean)[0]}`),
+  '두쪽.docx': (w) => (w.paragraphs.some((p) => p.includes('첫째 쪽입니다. 한글 본문이 들어 있습니다.')) ? null : '본문 글이 다름'),
+  '2단논문.docx': (w) => (w.paragraphs.some((p) => p.includes('Converting documents between formats is a common task.')) ? null : '본문 글이 다름'),
 };
 
 // 이미지 가로 크기 (AI 화질 개선 결과가 실제로 커졌는지 확인)
@@ -103,6 +125,9 @@ const CASES = [
   [['두쪽.pdf'], 'docx', '두쪽.docx'],
   [['두쪽.pdf'], 'jpg', '변환결과.zip'],
   [['스캔.pdf'], 'docx', '스캔.docx'],
+  [['보고서.pdf'], 'docx', '보고서.docx'], // 표·머리글·바닥글(쪽 번호)·한글 띄어쓰기
+  [['띄어쓰기없음.pdf'], 'docx', '띄어쓰기없음.docx'], // 띄어쓰기 글자 없이 위치로만 띄운 한글 PDF
+  [['2단논문.pdf'], 'docx', '2단논문.docx'],
   [['사진.jpg'], 'up2', '사진_고화질2배.jpg', 1600],
   [['투명.png'], 'up4', '투명_고화질4배.png'],
   [['작은영상.mp4'], 'up4', '작은영상_고화질4배.mp4'], // 하드웨어 인코더가 없을 때 (ffmpeg 인코딩)
@@ -161,6 +186,10 @@ for (const [inputs, target, expected, width, codec, strong] of CASES) {
     if (name !== expected) throw new Error(`파일 이름이 ${name} (기대: ${expected})`);
     if (!buf.length || !MAGIC[ext]?.(buf)) throw new Error(`${name} 내용이 올바르지 않음`);
     if (width && imageWidth(buf) !== width) throw new Error(`${name} 가로 크기가 ${imageWidth(buf)} (기대: ${width})`);
+    if (WORD_CHECKS[name]) {
+      const problem = WORD_CHECKS[name](wordParts(buf));
+      if (problem) throw new Error(`${name}: ${problem}`);
+    }
     // MP4 결과는 어디서나 재생되는 코덱(H.264, 아이폰 영상은 HEVC)이어야 한다 (VP9 시험은 제외)
     if (ext === 'mp4' && codec !== 'vp9' && !/avc1|hvc1/.test(buf.subarray(0, 1 << 20).toString('latin1'))) {
       throw new Error(`${name}이(가) 재생 호환 코덱(H.264)이 아님`);

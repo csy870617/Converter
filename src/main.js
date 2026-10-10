@@ -105,8 +105,10 @@ function render() {
 
   const allImages = usable.length > 1 && usable.every((f) => IMAGE.exts.includes(extOf(f.name)));
   $('mergeRow').classList.toggle('hidden', !(allImages && state.target === 'pdf'));
-  const needsOffice = usable.some((f) => categoryOf(f.name).engine === 'office');
-  $('officeNote').classList.toggle('hidden', !needsOffice);
+  // 문서 엔진·PDF→Word 엔진은 처음 한 번 받느라 오래 걸린다
+  const needsEngine = usable.some((f) => categoryOf(f.name).engine === 'office')
+    || (state.target === 'docx' && usable.some((f) => extOf(f.name) === 'pdf'));
+  $('officeNote').classList.toggle('hidden', !needsEngine);
   const upscaling = !!UPSCALE[state.target];
   $('upNote').classList.toggle('hidden', !upscaling);
   // 세기 선택은 AI 화질 개선 버튼이 보이면 항상 함께 보여준다 (고르기 전에도 눈에 띄도록)
@@ -196,6 +198,7 @@ async function run() {
 
   const results = [];
   const errors = [];
+  const warnings = [];
   const merge = !$('mergeRow').classList.contains('hidden') && $('merge').checked;
   const jobs = merge ? [{ files, label: `사진 ${files.length}장` }] : files.map((f) => ({ files: [f], label: f.name }));
   // 여러 개면 끝에 ZIP으로 묶는다. 묶는 도구를 미리 받아 둔다 (긴 변환 중에 인터넷이 끊겨도 묶을 수 있게)
@@ -217,6 +220,7 @@ async function run() {
         ? [await imagesToPdf(job.files, f.name.replace(/\.[^.]+$/, ''))]
         : await convertFile(f, categoryOf(f.name).engine, target, ctx);
       results.push(...out);
+      for (const r of out) if (r.warning) warnings.push(`${job.label}: ${r.warning}`);
       setState('완료', 'ok');
     } catch (e) {
       console.error(e);
@@ -247,7 +251,8 @@ async function run() {
   const press = link.auto ? '' : ' 아래 버튼을 눌러 받으세요.';
   let text = single ? `완료!${press}` : `완료! 파일 ${results.length}개를 ZIP으로 묶었습니다.${press}`;
   if (errors.length) text = `일부만 완료됐습니다. (완료 ${jobs.length - errors.length}개 · 실패 ${errors.length}개)${press}\n\n${errors.join('\n')}`;
-  setMsg(text, errors.length ? 'err' : 'ok', link);
+  if (warnings.length) text += `\n\n${warnings.join('\n')}`;
+  setMsg(text, errors.length || warnings.length ? 'err' : 'ok', link);
 }
 
 // 라이트/다크 모드 전환 (처음에는 기기 설정을 따르고, 고르면 기억한다)
