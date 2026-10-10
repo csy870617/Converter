@@ -16,13 +16,16 @@
     "@ffmpeg/ffmpeg": "^0.12.15",
     "@ffmpeg/util": "^0.12.2",
     "@matbee/libreoffice-converter": "^2.7.2",
+    "@rhwp/core": "0.8.7",
     "fflate": "^0.8.3",
     "heic-to": "^1.5.2",
+    "jspdf": "^4.2.1",
     "mediabunny": "^1.61.0",
     "onnxruntime-web": "^1.30.0",
     "pdf-lib": "^1.17.1",
     "pdfjs-dist": "^6.3.289",
     "pyodide": "0.29.3",
+    "svg2pdf.js": "^2.8.1",
     "utif2": "^4.1.0"
   },
   "devDependencies": {

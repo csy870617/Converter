@@ -55,7 +55,7 @@ function wordParts(buf) {
   const text = (xml) => xml.split(/<\/w:p>/).map((p) => [...p.matchAll(/<w:t(?: [^>]*)?>([^<]*)<\/w:t>/g)].map((m) => m[1]).join(''));
   const doc = strFromU8(files['word/document.xml']);
   const hf = Object.keys(files).filter((k) => /word\/(header|footer)\d*\.xml/.test(k)).map((k) => strFromU8(files[k]));
-  return { paragraphs: text(doc), tables: (doc.match(/<w:tbl>/g) || []).length, headers: hf.join('\n') };
+  return { paragraphs: text(doc), tables: (doc.match(/<w:tbl>/g) || []).length, headers: hf.join('\n'), bold: /<w:b\/>/.test(doc) };
 }
 const WORD_CHECKS = {
   '보고서.docx': (w) => {
@@ -68,6 +68,19 @@ const WORD_CHECKS = {
     ? null : `한글 띄어쓰기 추정 실패: ${w.paragraphs.filter(Boolean)[0]}`),
   '두쪽.docx': (w) => (w.paragraphs.some((p) => p.includes('첫째 쪽입니다. 한글 본문이 들어 있습니다.')) ? null : '본문 글이 다름'),
   '2단논문.docx': (w) => (w.paragraphs.some((p) => p.includes('Converting documents between formats is a common task.')) ? null : '본문 글이 다름'),
+  '한글문서.docx': (w) => {
+    if (!w.paragraphs.includes('제 1 조 (목적) 이 규정은 회사의 문서 관리에 필요한 사항을 정한다.')) return `본문 글이 다름: ${w.paragraphs.filter(Boolean)[1]}`;
+    if (w.tables < 1) return '표가 없음';
+    if (!w.bold) return '굵은 글씨가 사라짐';
+    return null;
+  },
+};
+// 한글 → PDF: 글자가 글자로 들어가고(굵은 글꼴·한자 글꼴), 띄어쓰기가 살아 있어야 한다
+const PDF_CHECKS = {
+  '한글문서.pdf': (b) => (['NanumMyeongjo-Bold', 'HanjaSerif', 'Symbols'].every((f) => b.includes(f)) ? null : '굵은 글꼴·한자·기호 글꼴이 없음'),
+};
+const TXT_CHECKS = {
+  '한글문서.txt': (t) => (t.includes('大韓民國 憲法 제1조 대한민국은 민주공화국이다.') && t.includes('매출') ? null : `글이 다름: ${t.slice(0, 80)}`),
 };
 
 // 이미지 가로 크기 (AI 화질 개선 결과가 실제로 커졌는지 확인)
@@ -129,6 +142,10 @@ const CASES = [
   [['띄어쓰기없음.pdf'], 'docx', '띄어쓰기없음.docx'], // 띄어쓰기 글자 없이 위치로만 띄운 한글 PDF
   [['2단논문.pdf'], 'docx', '2단논문.docx'],
   [['내글꼴.docx'], 'pdf', '내글꼴.pdf'], // 내 컴퓨터 글꼴(허락한 경우)로 그리기
+  [['한글문서.hwp'], 'pdf', '한글문서.pdf'], // 한글: 굵은 글씨·한자·기호·표
+  [['한글문서.hwpx'], 'docx', '한글문서.docx'],
+  [['한글문서.hwp'], 'txt', '한글문서.txt'],
+  [['한글문서.hwpx'], 'png', '한글문서.png'],
   [['사진.jpg'], 'up2', '사진_고화질2배.jpg', 1600],
   [['투명.png'], 'up4', '투명_고화질4배.png'],
   [['작은영상.mp4'], 'up4', '작은영상_고화질4배.mp4'], // 하드웨어 인코더가 없을 때 (ffmpeg 인코딩)
@@ -196,6 +213,8 @@ for (const [inputs, target, expected, width, codec, strong] of CASES) {
     if (!buf.length || !MAGIC[ext]?.(buf)) throw new Error(`${name} 내용이 올바르지 않음`);
     if (width && imageWidth(buf) !== width) throw new Error(`${name} 가로 크기가 ${imageWidth(buf)} (기대: ${width})`);
     if (name === '내글꼴.pdf' && !buf.includes('TestLocalFont')) throw new Error('내 컴퓨터 글꼴로 그리지 않음');
+    const problem = PDF_CHECKS[name]?.(buf.toString('latin1')) || TXT_CHECKS[name]?.(buf.toString('utf8'));
+    if (problem) throw new Error(`${name}: ${problem}`);
     if (WORD_CHECKS[name]) {
       const problem = WORD_CHECKS[name](wordParts(buf));
       if (problem) throw new Error(`${name}: ${problem}`);

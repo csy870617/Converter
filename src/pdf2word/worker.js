@@ -36,7 +36,8 @@ async function load(base) {
   const sizes = await (await fetch(`${dir}wheels.json`)).json();
   const total = Object.values(sizes).reduce((a, b) => a + b, 0);
   const { loadPyodide } = await import(/* @vite-ignore */ `${dir}pyodide.mjs`);
-  const py = await loadPyodide({ indexURL: dir });
+  // 파이썬이 찍는 진행 기록(pdf2docx 로그)은 개발자 도구의 '자세히' 수준으로만 남긴다
+  const py = await loadPyodide({ indexURL: dir, stdout: (t) => console.debug(t), stderr: (t) => console.debug(t) });
   const restore = trackDownloads(total);
   try {
     await py.loadPackage(Object.keys(sizes).map((name) => dir + name), { messageCallback: () => {} });

@@ -650,8 +650,35 @@ async function convertOffice(file, target, { status, progress }) {
 }
 
 // ---------------------------------------------------------------------------
+// 한글 문서 (rhwp WebAssembly): 먼저 PDF로 그린 뒤, 다른 형식은 PDF에서 바꾼다
+// ---------------------------------------------------------------------------
 
-const ENGINES = { media: convertMedia, image: convertImage, pdf: convertPdf, office: convertOffice };
+async function convertHwp(file, target, ctx) {
+  const stem = stemOf(file.name);
+  // 진행 막대: PDF 만들기와 그다음 변환(Word 등)을 나눠 보여 준다
+  const share = target === 'pdf' ? 1 : target === 'docx' ? 0.3 : 0.6;
+  let pdf;
+  try {
+    const { hwpToPdf, hwpToText } = await import('./hwp.js');
+    if (target === 'txt') {
+      ctx.status('변환 중…');
+      return [out(stem, 'txt', new Blob([await hwpToText(file)], { type: MIME.txt }))];
+    }
+    pdf = await hwpToPdf(file, { status: ctx.status, progress: (p) => ctx.progress(p * share) }, { forWord: target === 'docx' });
+  } catch (e) {
+    if (e instanceof ConvertError) throw e;
+    if (isLoadFailure(e)) throw new ConvertError(LOAD_FAILED);
+    console.error(e);
+    throw new ConvertError('한글 문서를 변환하지 못했습니다. 파일이 손상되었거나 아직 지원하지 않는 기능이 들어 있을 수 있습니다.');
+  }
+  if (target === 'pdf') return [out(stem, 'pdf', pdf)];
+  const pdfFile = new File([pdf], `${stem}.pdf`, { type: MIME.pdf });
+  return convertPdf(pdfFile, target, { ...ctx, progress: (p) => ctx.progress(share + p * (1 - share)) });
+}
+
+// ---------------------------------------------------------------------------
+
+const ENGINES = { media: convertMedia, image: convertImage, pdf: convertPdf, office: convertOffice, hwp: convertHwp };
 
 /**
  * @param {File} file

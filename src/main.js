@@ -108,8 +108,9 @@ function render() {
   $('mergeRow').classList.toggle('hidden', !(allImages && state.target === 'pdf'));
   // 문서 엔진·PDF→Word 엔진은 처음 한 번 받느라 오래 걸린다
   const needsEngine = usable.some((f) => categoryOf(f.name).engine === 'office')
-    || (state.target === 'docx' && usable.some((f) => extOf(f.name) === 'pdf'));
+    || (state.target === 'docx' && usable.some((f) => ['pdf', 'hwp'].includes(categoryOf(f.name).engine)));
   $('officeNote').classList.toggle('hidden', !needsEngine);
+  $('fontNote').classList.toggle('hidden', !(localFontsSupported() && usable.some((f) => categoryOf(f.name).engine === 'office')));
   const upscaling = !!UPSCALE[state.target];
   $('upNote').classList.toggle('hidden', !upscaling);
   // 세기 선택은 AI 화질 개선 버튼이 보이면 항상 함께 보여준다 (고르기 전에도 눈에 띄도록)

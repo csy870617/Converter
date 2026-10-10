@@ -21,6 +21,11 @@ export const CATEGORIES = [
     targets: ['pdf', 'docx'],
   },
   {
+    id: 'hwp', name: '한글 문서', engine: 'hwp',
+    exts: ['hwp', 'hwpx'],
+    targets: ['pdf', 'docx', 'jpg', 'png', 'txt'],
+  },
+  {
     id: 'slide', name: '프레젠테이션', engine: 'office',
     exts: ['ppt', 'pptx', 'odp'],
     targets: ['pdf', 'pptx'],
