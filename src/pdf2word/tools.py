@@ -29,6 +29,13 @@ def compress(src, dst, report=lambda p: None, password=None):
     report(1.0)
 
 
+def decrypt(src, dst, report=lambda p: None, password=None):
+    """암호를 풀어 다시 저장한다 (합치기·나누기는 암호 걸린 PDF를 그대로 다루지 못한다)."""
+    doc = _open(src, password)
+    doc.save(dst, garbage=1, deflate=True, encryption=pymupdf.PDF_ENCRYPT_NONE)
+    report(1.0)
+
+
 # ---------------------------------------------------------------------------
 # 표 꺼내기
 # ---------------------------------------------------------------------------

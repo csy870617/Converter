@@ -1,5 +1,5 @@
 import './style.css';
-import { CATEGORIES, ConvertError, MIME, TOOLS, UPSCALE, categoryOf, extOf, stemOf, targetLabel, targetsFor } from './formats.js';
+import { CATEGORIES, ConvertError, MIME, PasswordError, TOOLS, UPSCALE, categoryOf, extOf, stemOf, targetLabel, targetsFor } from './formats.js';
 import { LOAD_FAILED, convertFile, imagesToPdf, isLoadFailure, mergePdfs, officeSupported } from './engines.js';
 import { localFontsSupported, requestLocalFonts } from './localfonts.js';
 
@@ -177,6 +177,41 @@ function setMsg(text, kind = '', link = null) {
   }
 }
 
+/**
+ * 암호를 묻는다 (메시지 자리에 입력 칸을 띄운다). 입력한 암호, 건너뛰면 null.
+ */
+function askPassword(fileName, wrong) {
+  return new Promise((resolve) => {
+    const msg = $('msg');
+    msg.className = 'ask';
+    const form = document.createElement('form');
+    form.className = 'password';
+    const text = document.createElement('p');
+    text.textContent = wrong
+      ? `암호가 맞지 않습니다. ${fileName}의 암호를 다시 입력해 주세요.`
+      : `🔒 ${fileName}에 암호가 걸려 있습니다. 암호를 입력해 주세요.`;
+    const input = document.createElement('input');
+    input.type = 'password';
+    input.autocomplete = 'off';
+    input.required = true;
+    input.setAttribute('aria-label', '암호');
+    const ok = document.createElement('button');
+    ok.type = 'submit';
+    ok.textContent = '확인';
+    const skip = document.createElement('button');
+    skip.type = 'button';
+    skip.className = 'skip';
+    skip.textContent = '건너뛰기';
+    const row = document.createElement('div');
+    row.append(input, ok, skip);
+    form.append(text, row);
+    form.onsubmit = (e) => { e.preventDefault(); resolve(input.value); };
+    skip.onclick = () => resolve(null);
+    msg.replaceChildren(form);
+    input.focus();
+  });
+}
+
 function setBar(mode, pct = 0) {
   const bar = $('bar');
   bar.classList.toggle('show', !!mode);
@@ -234,6 +269,7 @@ async function run() {
 
   const results = [];
   const errors = [];
+  const passwords = new Map(); // 파일 이름 → 입력한 암호 (이번 변환 동안만 기억한다)
   const warnings = [];
   const notes = []; // 결과 설명 (예: 줄어든 용량)
   const merge = merging();
@@ -249,15 +285,27 @@ async function run() {
       status: (text) => { setMsg(`${prefix}${text}`); setBar('busy'); },
       progress: (p) => { setBar('progress', p); setState(`${Math.round(p * 100)}%`); },
       strong: state.strong,
+      passwordFor: (name) => passwords.get(name),
     };
     setState('변환 중…');
     ctx.status(`${job.label} 변환 중…`);
     try {
       const f = job.files[0];
       let out;
-      if (target === 'merge') out = [await mergePdfs(job.files, `${stemOf(f.name)}_합침`, ctx)];
-      else if (merge) out = [await imagesToPdf(job.files, stemOf(f.name))];
-      else out = await convertFile(f, categoryOf(f.name).engine, target, ctx);
+      // 암호가 걸려 있으면 암호를 물어 다시 한다 (틀리면 다시 묻는다)
+      for (;;) {
+        try {
+          if (target === 'merge') out = [await mergePdfs(job.files, `${stemOf(f.name)}_합침`, ctx)];
+          else if (merge) out = [await imagesToPdf(job.files, stemOf(f.name))];
+          else out = await convertFile(f, categoryOf(f.name).engine, target, ctx);
+          break;
+        } catch (e) {
+          if (!(e instanceof PasswordError)) throw e;
+          const password = await askPassword(e.fileName, e.wrong);
+          if (password === null) throw new ConvertError('암호를 입력하지 않아 건너뛰었습니다.');
+          passwords.set(e.fileName, password);
+        }
+      }
       results.push(...out);
       for (const r of out) if (r.warning) warnings.push(`${job.label}: ${r.warning}`);
       for (const r of out) if (r.note) notes.push(jobs.length > 1 ? `${job.label}: ${r.note}` : r.note);

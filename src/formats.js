@@ -90,3 +90,12 @@ export const MIME = {
 
 /** 사용자에게 그대로 보여줄 수 있는 오류 */
 export class ConvertError extends Error {}
+
+/** 암호가 필요하거나(wrong=false) 입력한 암호가 틀렸다(wrong=true). 화면에서 암호를 물어 다시 시도한다. */
+export class PasswordError extends ConvertError {
+  constructor(fileName, wrong = false) {
+    super(wrong ? `${fileName}: 암호가 맞지 않습니다.` : `${fileName}: 암호가 걸려 있습니다.`);
+    this.fileName = fileName;
+    this.wrong = wrong;
+  }
+}

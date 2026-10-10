@@ -106,6 +106,7 @@ const XLSX_CHECKS = {
   },
 };
 const TXT_CHECKS = {
+  '암호.txt': (t) => (t.includes('12,345') ? null : `글이 다름: ${t.slice(0, 60)}`),
   '한글문서.txt': (t) => (t.includes('大韓民國 憲法 제1조 대한민국은 민주공화국이다.') && t.includes('매출') ? null : `글이 다름: ${t.slice(0, 80)}`),
 };
 
@@ -201,6 +202,11 @@ const CASES = [
   [['보고서.pdf'], 'compress', '보고서_압축.pdf'], // PDF 도구
   [['두쪽.pdf'], 'split', '변환결과.zip'],
   [['두쪽.pdf', '보고서.pdf'], 'merge', '두쪽_합침.pdf'],
+  [['암호.pdf'], 'txt', '암호.txt'], // 암호를 물어 변환 (처음엔 틀린 암호를 넣어 다시 묻는지도 본다)
+  [['암호.pdf'], 'xlsx', '암호.xlsx'],
+  [['암호.pdf', '보고서.pdf'], 'merge', '암호_합침.pdf'],
+  [['암호.docx'], 'pdf', '암호.pdf'],
+  [['암호.hwp'], 'pdf', '암호.pdf'],
   [['사진.jpg'], 'up2', '사진_고화질2배.jpg', 1600],
   [['투명.png'], 'up4', '투명_고화질4배.png'],
   [['작은영상.mp4'], 'up4', '작은영상_고화질4배.mp4'], // 하드웨어 인코더가 없을 때 (ffmpeg 인코딩)
@@ -253,7 +259,16 @@ for (const [inputs, target, expected, width, codec, strong] of CASES) {
       continue;
     }
     const downloading = page.waitForEvent('download', { timeout: 600000 });
+    downloading.catch(() => {}); // 아래에서 먼저 실패해도 처리되지 않은 오류로 멈추지 않게
     await page.click('#go');
+    if (inputs.some((n) => n.startsWith('암호'))) {
+      // 틀린 암호 → '맞지 않습니다' 안내 → 맞는 암호
+      await page.fill('.password input', '0000', { timeout: 120000 });
+      await page.click('.password button[type=submit]');
+      await page.waitForSelector('text=암호가 맞지 않습니다', { timeout: 120000 });
+      await page.fill('.password input', '1234');
+      await page.click('.password button[type=submit]');
+    }
     // 오류 메시지가 뜨면 기다리지 않고 바로 실패 처리
     const download = await Promise.race([
       downloading,

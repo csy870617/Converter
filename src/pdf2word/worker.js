@@ -2,17 +2,30 @@
 //  - docx: PDF → Word (pdf2docx)
 //  - compress: PDF 용량 줄이기 (PyMuPDF)
 //  - tables: PDF 속 표 꺼내기 (PyMuPDF)
+//  - decrypt: PDF 암호 풀기 (합치기·나누기 전에)
+//  - office: 암호 걸린 Office 문서 풀기 (msoffcrypto-tool)
 // 처음 한 번 필요한 엔진을 받고, 그 뒤로는 브라우저 저장소에서 바로 쓴다.
-// 용량 줄이기·표 꺼내기는 PyMuPDF만 받고(약 20MB), Word 변환은 나머지(약 20MB)를 더 받는다.
+// 일마다 필요한 것만 받는다: PDF 도구는 PyMuPDF(약 20MB), Word 변환은 나머지(약 20MB)를 더, Office 암호 풀기는 약 2MB.
 import convertSource from './convert.py?raw';
 import toolsSource from './tools.py?raw';
+import officeCryptoSource from './officecrypto.py?raw';
 
 let pyodide = null; // Promise<{py, dir, sizes}>
 const loaded = new Set(); // 이미 불러온 휠 파일
 let current = null; // 지금 하는 일의 id (진행 소식에 붙인다)
 
 const post = (msg) => self.postMessage({ id: current, ...msg });
-const TOOLS_WHEELS = /^(pymupdf|fonttools)-/;
+// 일마다 필요한 휠 파일
+const PDF_TOOLS = /^(pymupdf|fonttools)-/;
+const NEEDS = {
+  docx: /^(numpy|opencv_python|lxml|fonttools|typing_extensions|pymupdf|python_docx|pdf2docx)-/,
+  compress: PDF_TOOLS,
+  tables: PDF_TOOLS,
+  decrypt: PDF_TOOLS,
+  office: /^(cryptography|cffi|pycparser|six|libopenssl|olefile|msoffcrypto_tool)-/,
+};
+// 파이썬 패키지가 아니라 함께 쓰는 라이브러리(.zip)는 이름으로 불러야 제자리에 놓인다
+const BY_NAME = { 'libopenssl-1.1.1w.zip': 'libopenssl' };
 
 /** 내려받기 진행률을 알 수 있게 fetch를 감싼다 (Pyodide가 휠 파일을 받을 때 쓴다). */
 function trackDownloads(total) {
@@ -21,7 +34,7 @@ function trackDownloads(total) {
   self.fetch = async (input, init) => {
     const res = await original(input, init);
     const url = typeof input === 'string' ? input : input.url;
-    if (!/\.whl$/.test(url) || !res.body) return res;
+    if (!/\.(whl|zip)$/.test(url) || !res.body) return res;
     const reader = res.body.getReader();
     const stream = new ReadableStream({
       async pull(controller) {
@@ -46,6 +59,7 @@ async function startPython(base) {
   const py = await loadPyodide({ indexURL: dir, stdout: (t) => console.debug(t), stderr: (t) => console.debug(t) });
   py.FS.writeFile('/home/pyodide/pdf2word_convert.py', convertSource);
   py.FS.writeFile('/home/pyodide/pdf_tools.py', toolsSource);
+  py.FS.writeFile('/home/pyodide/office_crypto.py', officeCryptoSource);
   return { py, dir, sizes };
 }
 
@@ -53,11 +67,14 @@ async function startPython(base) {
 async function ready(base, task) {
   if (!pyodide) pyodide = startPython(base).catch((e) => { pyodide = null; throw e; });
   const { py, dir, sizes } = await pyodide;
-  const need = Object.keys(sizes).filter((name) => !loaded.has(name) && (task === 'docx' || TOOLS_WHEELS.test(name)));
+  const need = Object.keys(sizes).filter((name) => !loaded.has(name) && NEEDS[task].test(name));
   if (need.length) {
     const restore = trackDownloads(need.reduce((sum, name) => sum + sizes[name], 0));
     try {
-      await py.loadPackage(need.map((name) => dir + name), { messageCallback: () => {} });
+      // 라이브러리를 먼저 (cryptography가 openssl을 쓴다)
+      const libs = need.filter((name) => BY_NAME[name]).map((name) => BY_NAME[name]);
+      if (libs.length) await py.loadPackage(libs, { messageCallback: () => {} });
+      await py.loadPackage(need.filter((name) => !BY_NAME[name]).map((name) => dir + name), { messageCallback: () => {} });
     } finally {
       restore();
     }
@@ -67,34 +84,38 @@ async function ready(base, task) {
 }
 
 self.onmessage = async (event) => {
-  const { id, base, buffer, task = 'docx' } = event.data;
+  const { id, base, buffer, task = 'docx', password = null } = event.data;
   current = id;
   let stage = 'load';
   try {
     const py = await ready(base, task);
     stage = 'convert';
     post({ type: 'progress', stage, value: 0 });
-    py.FS.writeFile('/in.pdf', new Uint8Array(buffer));
+    py.FS.writeFile('/in', new Uint8Array(buffer));
     const report = (p) => post({ type: 'progress', stage, value: p });
     try {
       if (task === 'tables') {
-        const json = py.pyimport('pdf_tools').tables('/in.pdf', report);
+        const json = py.pyimport('pdf_tools').tables('/in', report, password);
         self.postMessage({ id, type: 'done', tables: JSON.parse(json) });
         return;
       }
+      if (task === 'office' && !py.pyimport('office_crypto').decrypt('/in', '/out', password)) {
+        self.postMessage({ id, type: 'done', decrypted: false }); // 암호가 걸려 있지 않다
+        return;
+      }
       let failed = [];
-      if (task === 'compress') {
-        py.pyimport('pdf_tools').compress('/in.pdf', '/out', report);
-      } else {
-        const result = py.pyimport('pdf2word_convert').convert('/in.pdf', '/out', report);
+      if (task === 'compress' || task === 'decrypt') {
+        py.pyimport('pdf_tools')[task]('/in', '/out', report, password);
+      } else if (task === 'docx') {
+        const result = py.pyimport('pdf2word_convert').convert('/in', '/out', report, password);
         failed = Array.from(result.toJs());
         result.destroy();
       }
       const out = py.FS.readFile('/out');
       py.FS.unlink('/out');
-      self.postMessage({ id, type: 'done', buffer: out.buffer, failed }, [out.buffer]);
+      self.postMessage({ id, type: 'done', buffer: out.buffer, failed, decrypted: true }, [out.buffer]);
     } finally {
-      try { py.FS.unlink('/in.pdf'); } catch { /* 이미 지웠으면 그만 */ }
+      try { py.FS.unlink('/in'); } catch { /* 이미 지웠으면 그만 */ }
     }
   } catch (e) {
     const message = String(e?.message || e);

@@ -1,6 +1,6 @@
 // 실제 변환 엔진. 모든 변환은 브라우저 안에서 이루어지며 파일은 어디로도 전송되지 않는다.
 // 무거운 엔진(ffmpeg, LibreOffice, PDF.js 등)은 필요할 때 처음 한 번만 불러온다.
-import { ConvertError, MIME, UPSCALE, categoryOf, extOf, stemOf } from './formats.js';
+import { ConvertError, MIME, PasswordError, UPSCALE, categoryOf, extOf, stemOf } from './formats.js';
 import { localFontsFor } from './localfonts.js';
 
 export const asset = (path) => new URL(path, document.baseURI).href;
@@ -484,11 +484,12 @@ async function convertImage(file, target, ctx) {
 // PDF (PDF.js)
 // ---------------------------------------------------------------------------
 
-async function openPdf(file) {
+async function openPdf(file, password) {
   const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
   pdfjs.GlobalWorkerOptions.workerSrc = (await import('pdfjs-dist/legacy/build/pdf.worker.min.mjs?url')).default;
   const task = pdfjs.getDocument({
     data: new Uint8Array(await file.arrayBuffer()),
+    password,
     cMapUrl: asset('pdfjs/cmaps/'),
     cMapPacked: true,
     standardFontDataUrl: asset('pdfjs/standard_fonts/'),
@@ -499,7 +500,7 @@ async function openPdf(file) {
     return { doc: await task.promise, close: () => task.destroy().catch(() => {}) };
   } catch (e) {
     task.destroy().catch(() => {});
-    if (e?.name === 'PasswordException') throw new ConvertError('암호가 걸린 PDF는 변환할 수 없습니다.');
+    if (e?.name === 'PasswordException') throw new PasswordError(file.name, !!password);
     if (isLoadFailure(e)) throw new ConvertError(LOAD_FAILED); // PDF.js 작업 파일을 못 받은 경우
     throw new ConvertError('PDF를 열 수 없습니다. 손상된 파일일 수 있습니다.');
   }
@@ -573,10 +574,13 @@ const PDF_TASK_ERRORS = {
   docx: 'PDF를 Word로 바꾸지 못했습니다. 손상되었거나 특수한 PDF일 수 있습니다.',
   compress: 'PDF 용량을 줄이지 못했습니다. 손상되었거나 특수한 PDF일 수 있습니다.',
   tables: 'PDF에서 표를 꺼내지 못했습니다. 손상되었거나 특수한 PDF일 수 있습니다.',
+  decrypt: 'PDF의 암호를 풀지 못했습니다. 손상되었거나 특수한 PDF일 수 있습니다.',
+  office: '문서의 암호를 풀지 못했습니다. 손상되었거나 지원하지 않는 암호 방식일 수 있습니다.',
 };
 
-/** 작업자에게 PDF 일을 맡긴다. task: 'docx' | 'compress' | 'tables' */
+/** 작업자(브라우저용 파이썬)에게 일을 맡긴다. task: 'docx' | 'compress' | 'tables' | 'decrypt' | 'office' */
 function pdfTask(file, task, ctx, working = '변환 중…') {
+  const password = ctx.passwordFor?.(file.name) ?? null;
   ctx.status(task === 'docx' ? '준비 중… (처음 한 번 1~2분)' : '준비 중…');
   if (!pdfWorker) pdfWorker = new Worker(new URL('./pdf2word/worker.js', import.meta.url), { type: 'module' });
   const worker = pdfWorker;
@@ -598,8 +602,9 @@ function pdfTask(file, task, ctx, working = '변환 중…') {
       } else if (m.type === 'error') {
         done();
         if (m.code === 'load') { reset(); reject(new ConvertError(LOAD_FAILED)); return; }
+        if (m.code === 'password') { reject(new PasswordError(file.name, !!password)); return; }
         console.warn(`PDF 작업(${task}) 오류`, m.message);
-        reject(new ConvertError(m.code === 'password' ? '암호가 걸린 PDF는 변환할 수 없습니다.' : PDF_TASK_ERRORS[task]));
+        reject(new ConvertError(PDF_TASK_ERRORS[task]));
       }
     };
     const onError = (e) => {
@@ -611,21 +616,24 @@ function pdfTask(file, task, ctx, working = '변환 중…') {
     worker.addEventListener('message', onMessage);
     worker.addEventListener('error', onError);
     file.arrayBuffer().then((buffer) => {
-      worker.postMessage({ id, task, base: new URL('.', document.baseURI).href, buffer }, [buffer]);
+      worker.postMessage({ id, task, password, base: new URL('.', document.baseURI).href, buffer }, [buffer]);
     }, (e) => { done(); reject(e); });
   });
 }
 
 const prettyMB = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}MB` : `${Math.max(1, Math.round(n / 1e3))}KB`);
 
-/** pdf-lib으로 PDF를 연다 (암호·손상 안내 포함) */
-async function loadPdfLib(file) {
+/** pdf-lib으로 PDF를 연다. 암호가 걸린 PDF는 먼저 암호를 풀어서 연다 (pdf-lib은 암호를 풀지 못한다). */
+async function loadPdfLib(file, ctx) {
   const { PDFDocument } = await import('pdf-lib');
-  try {
-    return { PDFDocument, doc: await PDFDocument.load(await file.arrayBuffer(), { updateMetadata: false }) };
-  } catch (e) {
-    if (/encrypt/i.test(String(e?.message))) throw new ConvertError('암호가 걸린 PDF는 다룰 수 없습니다.');
-    throw new ConvertError('PDF를 열 수 없습니다. 손상된 파일일 수 있습니다.');
+  let bytes = await file.arrayBuffer();
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return { PDFDocument, doc: await PDFDocument.load(bytes, { updateMetadata: false }) };
+    } catch (e) {
+      if (attempt || !/encrypt/i.test(String(e?.message))) throw new ConvertError('PDF를 열 수 없습니다. 손상된 파일일 수 있습니다.');
+      ({ buffer: bytes } = await pdfTask(file, 'decrypt', ctx, '여는 중…'));
+    }
   }
 }
 
@@ -637,8 +645,9 @@ export async function mergePdfs(files, name, ctx) {
     ctx.status(`합치는 중… (${i + 1}/${files.length})`);
     let doc;
     try {
-      ({ doc } = await loadPdfLib(file));
+      ({ doc } = await loadPdfLib(file, ctx));
     } catch (e) {
+      if (e instanceof PasswordError || !(e instanceof ConvertError)) throw e;
       throw new ConvertError(`${file.name}: ${e.message}`);
     }
     for (const page of await merged.copyPages(doc, doc.getPageIndices())) merged.addPage(page);
@@ -676,7 +685,7 @@ async function convertPdf(file, target, ctx) {
   }
   if (target === 'split') {
     ctx.status('나누는 중…');
-    const { PDFDocument, doc: src } = await loadPdfLib(file);
+    const { PDFDocument, doc: src } = await loadPdfLib(file, ctx);
     const count = src.getPageCount();
     const digits = String(count).length;
     const results = [];
@@ -689,7 +698,7 @@ async function convertPdf(file, target, ctx) {
     }
     return results;
   }
-  const { doc, close } = await openPdf(file);
+  const { doc, close } = await openPdf(file, ctx.passwordFor?.(file.name));
   try {
     if (target === 'txt') {
       const pages = [];
@@ -831,17 +840,32 @@ const SIGNATURES = {
   ole: [0xd0, 0xcf, 0x11, 0xe0], // doc, xls, ppt
 };
 // doc/xls는 실제로는 HTML·RTF인 경우(은행 거래내역 등)가 많아 검사하지 않는다.
+// 암호가 걸린 docx·xlsx·pptx는 zip이 아니라 ole 형식에 담겨 있다
+const OOXML = ['zip', 'ole'];
 const EXPECTED_SIGNATURE = {
-  docx: 'zip', docm: 'zip', dotx: 'zip', xlsx: 'zip', xlsm: 'zip', xlsb: 'zip', pptx: 'zip', pptm: 'zip', ppsx: 'zip',
+  docx: OOXML, docm: OOXML, dotx: OOXML, xlsx: OOXML, xlsm: OOXML, xlsb: OOXML, pptx: OOXML, pptm: OOXML, ppsx: OOXML,
   odt: 'zip', ods: 'zip', odp: 'zip', ppt: 'ole', pps: 'ole',
 };
 
+/** 진짜 문서인지 확인하고, ole 형식(옛 doc·xls·ppt 또는 암호 걸린 docx 등)인지 돌려준다. */
 async function checkDocument(file) {
-  const expected = EXPECTED_SIGNATURE[extOf(file.name)];
-  if (!expected) return;
   const head = new Uint8Array(await file.slice(0, 8).arrayBuffer());
-  const ok = [expected].flat().some((kind) => SIGNATURES[kind].every((b, i) => head[i] === b));
-  if (!ok) throw new ConvertError('문서를 열 수 없습니다. 파일이 손상되었거나 확장자가 실제 형식과 다릅니다.');
+  const ole = SIGNATURES.ole.every((b, i) => head[i] === b);
+  const expected = EXPECTED_SIGNATURE[extOf(file.name)];
+  if (expected && ![expected].flat().some((kind) => SIGNATURES[kind].every((b, i) => head[i] === b))) {
+    throw new ConvertError('문서를 열 수 없습니다. 파일이 손상되었거나 확장자가 실제 형식과 다릅니다.');
+  }
+  return { ole };
+}
+
+// 암호 걸린 docx·xlsx·pptx 안에 들어 있는 'EncryptionInfo' (ole 목록의 이름은 UTF-16)
+const ENCRYPTION_INFO = new Uint8Array([...'EncryptionInfo'].flatMap((c) => [c.charCodeAt(0), 0]));
+function hasBytes(data, needle) {
+  outer: for (let i = data.indexOf(needle[0]); i >= 0 && i <= data.length - needle.length; i = data.indexOf(needle[0], i + 1)) {
+    for (let j = 1; j < needle.length; j++) if (data[i + j] !== needle[j]) continue outer;
+    return true;
+  }
+  return false;
 }
 
 async function convertOffice(file, target, ctx) {
@@ -852,11 +876,22 @@ async function convertOffice(file, target, ctx) {
     return convertPdf(pdfFile, target, { ...ctx, progress: (p) => ctx.progress(0.7 + p * 0.3) });
   }
   const { status, progress } = ctx;
-  await checkDocument(file);
+  const password = ctx.passwordFor?.(file.name);
+  const { ole } = await checkDocument(file);
+  let data = new Uint8Array(await file.arrayBuffer());
+  // 암호 걸린 docx·xlsx·pptx: 엔진은 암호를 묻지 못하고 '형식을 모른다'며 멈추므로 먼저 알아보고 암호를 묻는다
+  const encrypted = ole && hasBytes(data, ENCRYPTION_INFO);
+  if (encrypted && !password) throw new PasswordError(file.name);
+  // 암호를 받았으면 먼저 풀어 둔다 (이 엔진은 브라우저에서 Office 암호를 풀지 못한다)
+  if (password && ole) {
+    const result = await pdfTask(file, 'office', ctx, '암호를 푸는 중…');
+    if (result.decrypted) data = new Uint8Array(result.buffer);
+  }
   // 문서가 쓰는 글꼴이 이 컴퓨터에 있으면(허락한 경우) 그 글꼴로 그린다
   let localFonts = [];
-  try { localFonts = await localFontsFor([file], status); } catch (e) { console.warn('내 컴퓨터 글꼴을 읽지 못했습니다', e); }
-  const data = new Uint8Array(await file.arrayBuffer());
+  if (!encrypted) {
+    try { localFonts = await localFontsFor([file], status); } catch (e) { console.warn('내 컴퓨터 글꼴을 읽지 못했습니다', e); }
+  }
   // 멈추는 곳은 '문서 여는' 단계(진행 30%)다. 평소엔 1~2초라 그 단계에서만 짧게 지켜본다
   // (큰 문서는 크기만큼 늘린다). 그 뒤의 실제 변환은 큰 문서면 오래 걸릴 수 있으니 넉넉히 기다린다.
   const openLimit = 20_000 + (file.size / 1_000_000) * 10_000;
@@ -883,7 +918,10 @@ async function convertOffice(file, target, ctx) {
       }
       if (e instanceof ConvertError) throw e;
       const msg = String(e?.message || e);
-      if (/password/i.test(msg)) throw new ConvertError('암호가 걸린 문서는 변환할 수 없습니다.');
+      // 암호가 틀렸거나, 옛 형식(doc·xls·ppt)에 암호가 걸려 있으면 엔진이 문서 형식을 알아내지 못한다
+      if (/password/i.test(msg) || ((encrypted || ole) && /type detection aborted/i.test(msg))) {
+        throw new PasswordError(file.name, !!password);
+      }
       console.error(e);
       throw new ConvertError('문서를 변환하지 못했습니다. 파일이 손상되었을 수 있습니다.');
     }
@@ -903,9 +941,9 @@ async function convertHwp(file, target, ctx) {
     const { hwpToPdf, hwpToText } = await import('./hwp.js');
     if (target === 'txt') {
       ctx.status('변환 중…');
-      return [out(stem, 'txt', new Blob([await hwpToText(file)], { type: MIME.txt }))];
+      return [out(stem, 'txt', new Blob([await hwpToText(file, ctx)], { type: MIME.txt }))];
     }
-    pdf = await hwpToPdf(file, { status: ctx.status, progress: (p) => ctx.progress(p * share) }, { forWord: target === 'docx' });
+    pdf = await hwpToPdf(file, { ...ctx, progress: (p) => ctx.progress(p * share) }, { forWord: target === 'docx' });
   } catch (e) {
     if (e instanceof ConvertError) throw e;
     if (isLoadFailure(e)) throw new ConvertError(LOAD_FAILED);

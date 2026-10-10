@@ -49,7 +49,7 @@ for (const dir of ['cmaps', 'standard_fonts', 'wasm', 'iccs']) {
   if (!fs.existsSync(dest)) fs.cpSync(nm(`pdfjs-dist/${dir}`), dest, { recursive: true });
 }
 
-// PDF → Word 변환 엔진: Pyodide(브라우저용 파이썬)와 pdf2docx·PyMuPDF 등 휠 파일.
+// 브라우저용 파이썬(Pyodide)과 휠 파일: PDF → Word(pdf2docx), PDF 도구(PyMuPDF), Office 암호 풀기(msoffcrypto-tool).
 // 휠은 정해 둔 판만 받아 SHA-256으로 확인한다. (받은 것은 node_modules/.cache/wheels 에 보관)
 const PYODIDE_CDN = 'https://cdn.jsdelivr.net/pyodide/v0.29.3/full/';
 const PYPI = 'https://files.pythonhosted.org/packages/';
@@ -62,6 +62,14 @@ export const WHEELS = [
   ['pymupdf-1.28.2-cp313-abi3-pyemscripten_2025_0_wasm32.whl', `${PYPI}58/8c/d897dcd32a25b58186c968b15ce4324ca029e9d96460de12325314e390be/`, '2e1b574c0fd2cb238021033fd3c0f9c4388816638df064e4bfb56d9d81736dc8'],
   ['python_docx-1.2.0-py3-none-any.whl', `${PYPI}d0/00/1e03a4989fa5795da308cd774f05b704ace555a70f9bf9d3be057b680bcf/`, '3fd478f3250fbbbfd3b94fe1e985955737c145627498896a8a6bf81f4baf66c7'],
   ['pdf2docx-0.5.13-py3-none-any.whl', `${PYPI}71/4d/4041fddff079a2cd0c87612afe74a16d2cf032b2aa73ecddbc6bca2a04fe/`, 'a293e9e78d89b12a4a43fcefba1346de220681c3daf20b8a7d3e1fce77f0fe97'],
+  // 암호 걸린 Office 문서 풀기 (msoffcrypto-tool과 그것이 쓰는 cryptography 등)
+  ['cryptography-46.0.3-cp313-abi3-pyodide_2025_0_wasm32.whl', PYODIDE_CDN, '8dcec3549f85ea9df0941f75339fa5539d3b4a87ea0a47ab1957fd30c3878419'],
+  ['cffi-1.17.1-cp313-cp313-pyodide_2025_0_wasm32.whl', PYODIDE_CDN, 'a91747e5e4d982e7e7b2f158f2d06302c4205198ccec688e34b9c310e4417da7'],
+  ['pycparser-2.22-py3-none-any.whl', PYODIDE_CDN, '778a41679914eee8499ce3d37a8d15d808d8972e70aa02eef13ac59649559aaa'],
+  ['six-1.17.0-py2.py3-none-any.whl', PYODIDE_CDN, '1f715fc699e802b31e53290ead6c16a4d6a8da462a225d2e06097fce45ab70b9'],
+  ['libopenssl-1.1.1w.zip', PYODIDE_CDN, 'eaec7126f466a33ea4121fd230211bb01e9ad1c5748f3cd0b4b1c8677b4ac90a'],
+  ['olefile-0.47-py2.py3-none-any.whl', `${PYPI}17/d3/b64c356a907242d719fc668b71befd73324e47ab46c8ebbbede252c154b2/`, '543c7da2a7adadf21214938bb79c83ea12b473a4b6ee4ad4bf854e7715e13d1f'],
+  ['msoffcrypto_tool-6.0.0-py3-none-any.whl', `${PYPI}3c/85/9e359fa9279e1d6861faaf9b6f037a3226374deb20a054c3937be6992013/`, '46c394ed5d9641e802fc79bf3fb0666a53748b23fa8c4aa634ae9d30d46fe397'],
 ];
 
 for (const file of ['pyodide.mjs', 'pyodide.asm.js', 'pyodide.asm.wasm', 'python_stdlib.zip', 'pyodide-lock.json']) {

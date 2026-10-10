@@ -3,7 +3,7 @@
 // 문서의 글꼴(함초롬바탕·맑은 고딕·Times New Roman 등)은 모양이 비슷한 자유 글꼴로 바꾸고,
 // 그 글꼴에 없는 글자(한자·특수 기호)는 그 글자가 있는 글꼴로 채운다. 글자 위치는 원래 문서 그대로다.
 import wasmUrl from '@rhwp/core/rhwp_bg.wasm?url';
-import { ConvertError } from './formats.js';
+import { ConvertError, PasswordError } from './formats.js';
 
 const asset = (path) => new URL(path, document.baseURI).href;
 
@@ -297,21 +297,22 @@ function base64(bytes) {
 }
 const fontBase64 = new Map(); // 파일 → base64 (jsPDF가 글꼴을 이 형태로 받는다)
 
-async function openHwp(rhwp, file) {
+async function openHwp(rhwp, file, password) {
+  const bytes = new Uint8Array(await file.arrayBuffer());
   let doc;
   try {
-    doc = new rhwp.HwpDocument(new Uint8Array(await file.arrayBuffer()));
+    doc = password ? rhwp.HwpDocument.openWithPassword(bytes, password) : new rhwp.HwpDocument(bytes);
   } catch (e) {
-    console.error(e);
     const msg = String(e?.message || e);
-    if (/암호|password|encrypt/i.test(msg)) throw new ConvertError('암호가 걸린 한글 문서는 변환할 수 없습니다.');
+    if (/비밀번호|암호|password|encrypt/i.test(msg)) throw new PasswordError(file.name, !!password);
+    console.error(e);
     throw new ConvertError('한글 문서를 열 수 없습니다. 파일이 손상되었거나 확장자가 실제 형식과 다릅니다.');
   }
   let info = {};
   try { info = JSON.parse(doc.getDocumentInfo()); } catch { /* 정보가 없어도 그린다 */ }
-  if (info.encrypted) {
+  if (info.encrypted && !password) {
     try { doc.free(); } catch { /* 무시 */ }
-    throw new ConvertError('암호가 걸린 한글 문서는 변환할 수 없습니다.');
+    throw new PasswordError(file.name);
   }
   return doc;
 }
@@ -319,8 +320,8 @@ async function openHwp(rhwp, file) {
 const ENTITY = { lt: '<', gt: '>', amp: '&', quot: '"', apos: "'", nbsp: ' ' };
 
 /** 한글 문서의 글을 문서 순서대로 (표 안의 글 포함, 2단도 섞이지 않게) */
-export async function hwpToText(file) {
-  const doc = await openHwp(await loadRhwp(), file);
+export async function hwpToText(file, ctx) {
+  const doc = await openHwp(await loadRhwp(), file, ctx.passwordFor?.(file.name));
   try {
     let text = doc.getTextFileText();
     if (text.startsWith('"')) { try { text = JSON.parse(text); } catch { /* 그대로 */ } }
@@ -342,10 +343,11 @@ export async function hwpToText(file) {
  * @param {{forWord?: boolean}} options forWord: Word로 바꾸기 위한 PDF (글꼴 이름을 Word 글꼴 이름으로)
  * @returns {Promise<Blob>} PDF
  */
-export async function hwpToPdf(file, { status, progress }, { forWord = false } = {}) {
+export async function hwpToPdf(file, ctx, { forWord = false } = {}) {
+  const { status, progress } = ctx;
   status('준비 중…');
   const [rhwp, { jsPDF }, { svg2pdf }] = await Promise.all([loadRhwp(), import('jspdf'), import('svg2pdf.js')]);
-  const doc = await openHwp(rhwp, file);
+  const doc = await openHwp(rhwp, file, ctx.passwordFor?.(file.name));
   const holder = document.createElement('div'); // svg2pdf가 계산된 모양을 읽을 수 있게 화면 밖에 잠시 붙인다
   holder.style.cssText = 'position:fixed;left:-100000px;top:0;width:10px;height:10px;overflow:hidden;visibility:hidden';
   document.body.append(holder);
