@@ -1,6 +1,6 @@
 import './style.css';
-import { CATEGORIES, ConvertError, MIME, UPSCALE, categoryOf, extOf, targetLabel, targetsFor } from './formats.js';
-import { LOAD_FAILED, convertFile, imagesToPdf, isLoadFailure, officeSupported } from './engines.js';
+import { CATEGORIES, ConvertError, MIME, TOOLS, UPSCALE, categoryOf, extOf, stemOf, targetLabel, targetsFor } from './formats.js';
+import { LOAD_FAILED, convertFile, imagesToPdf, isLoadFailure, mergePdfs, officeSupported } from './engines.js';
 import { localFontsSupported, requestLocalFonts } from './localfonts.js';
 
 // ---------------------------------------------------------------------------
@@ -39,6 +39,18 @@ function addFiles(list) {
 }
 
 function render() {
+  // 모든 파일에 공통으로 가능한 형식만 보여준다
+  const usable = usableFiles();
+  let common = null;
+  for (const f of usable) {
+    const t = targetsFor(f.name);
+    common = common === null ? t : common.filter((x) => t.includes(x));
+  }
+  common ??= [];
+  // PDF 여러 개: 하나로 합치기
+  if (usable.length > 1 && usable.every((f) => extOf(f.name) === 'pdf')) common.push('merge');
+  if (!common.includes(state.target)) state.target = common.length === 1 ? common[0] : null;
+
   const ul = $('files');
   ul.replaceChildren();
   state.files.forEach((f, i) => {
@@ -63,28 +75,36 @@ function render() {
     del.setAttribute('aria-label', `${f.name} 빼기`);
     del.disabled = state.busy;
     del.onclick = () => { state.files.splice(i, 1); state.status.clear(); render(); };
-    li.append(name, info, del);
+    li.append(name, info);
+    // 여러 파일을 하나로 합칠 때는 목록 순서대로 합치므로 순서를 바꿀 수 있게 한다
+    if (merging() && i > 0) {
+      const up = document.createElement('button');
+      up.className = 'up';
+      up.textContent = '▲';
+      up.title = '위로 올리기';
+      up.setAttribute('aria-label', `${f.name} 위로`);
+      up.disabled = state.busy;
+      up.onclick = () => { [state.files[i - 1], state.files[i]] = [state.files[i], state.files[i - 1]]; render(); };
+      li.append(up);
+    }
+    li.append(del);
     ul.append(li);
   });
-
-  // 모든 파일에 공통으로 가능한 형식만 보여준다
-  const usable = usableFiles();
-  let common = null;
-  for (const f of usable) {
-    const t = targetsFor(f.name);
-    common = common === null ? t : common.filter((x) => t.includes(x));
-  }
-  common ??= [];
-  if (!common.includes(state.target)) state.target = common.length === 1 ? common[0] : null;
 
   const box = $('targets');
   box.replaceChildren();
   for (const t of common) {
-    // AI 화질 개선은 형식 바꾸기와 성격이 달라 둘째 줄에 따로 보여준다
+    // AI 화질 개선·PDF 도구는 형식 바꾸기와 성격이 달라 따로 줄을 나눠 보여준다
     if (UPSCALE[t] && !box.querySelector('.ai')) {
       const row = document.createElement('div');
       row.className = 'ai-row';
       row.textContent = 'AI 화질 개선';
+      box.append(row);
+    }
+    if (TOOLS[t] && !box.querySelector('.tool')) {
+      const row = document.createElement('div');
+      row.className = 'ai-row';
+      row.textContent = 'PDF 도구';
       box.append(row);
     }
     const b = document.createElement('button');
@@ -92,6 +112,7 @@ function render() {
     b.setAttribute('aria-pressed', String(t === state.target));
     b.textContent = targetLabel(t);
     if (UPSCALE[t]) b.classList.add('ai');
+    if (TOOLS[t]) b.classList.add('tool');
     b.disabled = state.busy;
     b.onclick = () => { state.target = t; render(); };
     box.append(b);
@@ -104,8 +125,8 @@ function render() {
   else hint.textContent = '';
   hint.classList.toggle('hidden', !hint.textContent);
 
-  const allImages = usable.length > 1 && usable.every((f) => IMAGE.exts.includes(extOf(f.name)));
-  $('mergeRow').classList.toggle('hidden', !(allImages && state.target === 'pdf'));
+  $('mergeRow').classList.toggle('hidden', !imagesToOnePdf(usable));
+  $('mergeNote').classList.toggle('hidden', !merging());
   // 문서 엔진·PDF→Word 엔진은 처음 한 번 받느라 오래 걸린다
   const needsEngine = usable.some((f) => categoryOf(f.name).engine === 'office')
     || (state.target === 'docx' && usable.some((f) => ['pdf', 'hwp'].includes(categoryOf(f.name).engine)));
@@ -126,8 +147,19 @@ function render() {
   if (!state.busy) {
     if (!state.target) go.textContent = '변환하기';
     else if (UPSCALE[state.target]) go.textContent = `${targetLabel(state.target)}로 화질 높이기`;
+    else if (TOOLS[state.target]) go.textContent = `PDF ${targetLabel(state.target)}`;
     else go.textContent = `${state.target.toUpperCase()}(으)로 변환하기`;
   }
+}
+
+/** 사진 여러 장 → PDF 한 개로 합치기 (체크 상자로 고른다) */
+function imagesToOnePdf(usable = usableFiles()) {
+  return usable.length > 1 && state.target === 'pdf' && usable.every((f) => IMAGE.exts.includes(extOf(f.name)));
+}
+
+/** 여러 파일을 목록 순서대로 하나로 합치는가 */
+function merging() {
+  return state.target === 'merge' || (imagesToOnePdf() && $('merge').checked);
 }
 
 function setMsg(text, kind = '', link = null) {
@@ -203,8 +235,10 @@ async function run() {
   const results = [];
   const errors = [];
   const warnings = [];
-  const merge = !$('mergeRow').classList.contains('hidden') && $('merge').checked;
-  const jobs = merge ? [{ files, label: `사진 ${files.length}장` }] : files.map((f) => ({ files: [f], label: f.name }));
+  const notes = []; // 결과 설명 (예: 줄어든 용량)
+  const merge = merging();
+  const jobs = merge ? [{ files, label: target === 'merge' ? `PDF ${files.length}개` : `사진 ${files.length}장` }]
+    : files.map((f) => ({ files: [f], label: f.name }));
   // 여러 개면 끝에 ZIP으로 묶는다. 묶는 도구를 미리 받아 둔다 (긴 변환 중에 인터넷이 끊겨도 묶을 수 있게)
   if (jobs.length > 1) import('fflate').catch(() => {});
 
@@ -220,11 +254,13 @@ async function run() {
     ctx.status(`${job.label} 변환 중…`);
     try {
       const f = job.files[0];
-      const out = merge
-        ? [await imagesToPdf(job.files, f.name.replace(/\.[^.]+$/, ''))]
-        : await convertFile(f, categoryOf(f.name).engine, target, ctx);
+      let out;
+      if (target === 'merge') out = [await mergePdfs(job.files, `${stemOf(f.name)}_합침`, ctx)];
+      else if (merge) out = [await imagesToPdf(job.files, stemOf(f.name))];
+      else out = await convertFile(f, categoryOf(f.name).engine, target, ctx);
       results.push(...out);
       for (const r of out) if (r.warning) warnings.push(`${job.label}: ${r.warning}`);
+      for (const r of out) if (r.note) notes.push(jobs.length > 1 ? `${job.label}: ${r.note}` : r.note);
       setState('완료', 'ok');
     } catch (e) {
       console.error(e);
@@ -255,6 +291,7 @@ async function run() {
   const press = link.auto ? '' : ' 아래 버튼을 눌러 받으세요.';
   let text = single ? `완료!${press}` : `완료! 파일 ${results.length}개를 ZIP으로 묶었습니다.${press}`;
   if (errors.length) text = `일부만 완료됐습니다. (완료 ${jobs.length - errors.length}개 · 실패 ${errors.length}개)${press}\n\n${errors.join('\n')}`;
+  if (notes.length) text += `\n${notes.join('\n')}`;
   if (warnings.length) text += `\n\n${warnings.join('\n')}`;
   setMsg(text, errors.length || warnings.length ? 'err' : 'ok', link);
 }
@@ -295,7 +332,9 @@ $('formats').replaceChildren(...CATEGORIES.map((c) => {
   name.textContent = c.name;
   const desc = document.createElement('td');
   const to = document.createElement('b');
-  to.textContent = c.targets.map(targetLabel).join(', ');
+  // 여러 파일을 하나로 합치는 것도 함께 적는다
+  const extra = { pdf: ['여러 개를 하나로 합치기'], image: ['여러 장을 PDF 하나로'] }[c.id] || [];
+  to.textContent = [...c.targets.map(targetLabel), ...extra].join(', ');
   desc.append(`${c.exts.join(', ').toUpperCase()} → `, to);
   tr.append(name, desc);
   return tr;
@@ -311,6 +350,7 @@ for (const ev of ['dragleave', 'drop']) window.addEventListener(ev, (e) => { e.p
 window.addEventListener('drop', (e) => addFiles([...(e.dataTransfer?.files || [])]));
 window.addEventListener('paste', (e) => { if (e.clipboardData?.files.length) addFiles([...e.clipboardData.files]); });
 $('go').onclick = run;
+$('merge').onchange = render;
 window.addEventListener('beforeunload', (e) => {
   if (!state.busy) return;
   e.preventDefault();

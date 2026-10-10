@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { chromium } from 'playwright-core';
 import { unzipSync, strFromU8 } from 'fflate';
+import { PDFDocument } from 'pdf-lib';
 
 const root = path.resolve(import.meta.dirname, '..', 'dist');
 const fixtures = path.resolve(import.meta.dirname, 'fixtures');
@@ -42,6 +43,13 @@ const MAGIC = {
   ico: (b) => b.readUInt32LE(0) === 0x10000,
   pdf: (b) => b.subarray(0, 4).toString() === '%PDF',
   docx: (b) => b.subarray(0, 2).toString() === 'PK',
+  odt: (b) => b.subarray(0, 2).toString() === 'PK',
+  ods: (b) => b.subarray(0, 2).toString() === 'PK',
+  odp: (b) => b.subarray(0, 2).toString() === 'PK',
+  doc: (b) => b.readUInt32BE(0) === 0xd0cf11e0,
+  xls: (b) => b.readUInt32BE(0) === 0xd0cf11e0,
+  ppt: (b) => b.readUInt32BE(0) === 0xd0cf11e0,
+  rtf: (b) => b.subarray(0, 5).toString() === '{\\rtf',
   pptx: (b) => b.subarray(0, 2).toString() === 'PK',
   xlsx: (b) => b.subarray(0, 2).toString() === 'PK',
   zip: (b) => b.subarray(0, 2).toString() === 'PK',
@@ -79,6 +87,14 @@ const WORD_CHECKS = {
 const PDF_CHECKS = {
   '한글문서.pdf': (b) => (['NanumMyeongjo-Bold', 'HanjaSerif', 'Symbols'].every((f) => b.includes(f)) ? null : '굵은 글꼴·한자·기호 글꼴이 없음'),
 };
+const XLSX_CHECKS = {
+  '보고서.xlsx': (files) => {
+    const sheet = strFromU8(files['xl/worksheets/sheet1.xml'] || new Uint8Array());
+    if (!sheet.includes('온라인')) return '표의 글이 없음';
+    if (!/<v>1240<\/v>/.test(sheet)) return '숫자가 숫자로 들어가지 않음 (1,240)';
+    return null;
+  },
+};
 const TXT_CHECKS = {
   '한글문서.txt': (t) => (t.includes('大韓民國 憲法 제1조 대한민국은 민주공화국이다.') && t.includes('매출') ? null : `글이 다름: ${t.slice(0, 80)}`),
 };
@@ -94,7 +110,9 @@ function imageWidth(b) {
   return 0;
 }
 
-const LABEL = { up2: '고화질 2배', up4: '고화질 4배' };
+const LABEL = { up2: '고화질 2배', up4: '고화질 4배', compress: '용량 줄이기', split: '쪽 나누기', merge: '하나로 합치기' };
+const UPSCALE = ['up2', 'up4'];
+const pdfPages = async (b) => (await PDFDocument.load(b)).getPageCount();
 
 // [입력 파일들, 변환 형식, 예상 결과 파일 이름, 예상 가로 크기, 동영상 코덱 강제, AI 세기 '강하게']
 const CASES = [
@@ -146,6 +164,19 @@ const CASES = [
   [['한글문서.hwpx'], 'docx', '한글문서.docx'],
   [['한글문서.hwp'], 'txt', '한글문서.txt'],
   [['한글문서.hwpx'], 'png', '한글문서.png'],
+  [['회의록.docx'], 'doc', '회의록.doc'], // 문서 형식 더 보기
+  [['회의록.docx'], 'odt', '회의록.odt'],
+  [['회의록.docx'], 'rtf', '회의록.rtf'],
+  [['회의록.docx'], 'txt', '회의록.txt'],
+  [['회의록.docx'], 'jpg', '회의록.jpg'], // 쪽을 그림으로
+  [['발표.pptx'], 'png', '발표.png'],
+  [['발표.pptx'], 'odp', '발표.odp'],
+  [['성적.xlsx'], 'xls', '성적.xls'],
+  [['성적.xlsx'], 'ods', '성적.ods'],
+  [['보고서.pdf'], 'xlsx', '보고서.xlsx'], // PDF 표 → 엑셀
+  [['보고서.pdf'], 'compress', '보고서_압축.pdf'], // PDF 도구
+  [['두쪽.pdf'], 'split', '변환결과.zip'],
+  [['두쪽.pdf', '보고서.pdf'], 'merge', '두쪽_합침.pdf'],
   [['사진.jpg'], 'up2', '사진_고화질2배.jpg', 1600],
   [['투명.png'], 'up4', '투명_고화질4배.png'],
   [['작은영상.mp4'], 'up4', '작은영상_고화질4배.mp4'], // 하드웨어 인코더가 없을 때 (ffmpeg 인코딩)
@@ -188,7 +219,7 @@ for (const [inputs, target, expected, width, codec, strong] of CASES) {
       name, mimeType: 'application/octet-stream', buffer: fs.readFileSync(path.join(fixtures, name)),
     })));
     await page.getByRole('button', LABEL[target] ? { name: LABEL[target] } : { name: target.toUpperCase(), exact: true }).click();
-    if (LABEL[target]) await page.getByRole('button', { name: strong ? '강하게' : '자연스럽게', exact: true }).click();
+    if (UPSCALE.includes(target)) await page.getByRole('button', { name: strong ? '강하게' : '자연스럽게', exact: true }).click();
     if (expected === null) {
       await page.click('#go');
       await page.waitForSelector('#msg.err', { timeout: 600000 });
@@ -213,7 +244,9 @@ for (const [inputs, target, expected, width, codec, strong] of CASES) {
     if (!buf.length || !MAGIC[ext]?.(buf)) throw new Error(`${name} 내용이 올바르지 않음`);
     if (width && imageWidth(buf) !== width) throw new Error(`${name} 가로 크기가 ${imageWidth(buf)} (기대: ${width})`);
     if (name === '내글꼴.pdf' && !buf.includes('TestLocalFont')) throw new Error('내 컴퓨터 글꼴로 그리지 않음');
-    const problem = PDF_CHECKS[name]?.(buf.toString('latin1')) || TXT_CHECKS[name]?.(buf.toString('utf8'));
+    const problem = PDF_CHECKS[name]?.(buf.toString('latin1')) || TXT_CHECKS[name]?.(buf.toString('utf8'))
+      || XLSX_CHECKS[name]?.(unzipSync(new Uint8Array(buf)));
+    if (name === '두쪽_합침.pdf' && (await pdfPages(buf)) !== 4) throw new Error(`합친 PDF가 ${await pdfPages(buf)}쪽 (기대: 4쪽)`);
     if (problem) throw new Error(`${name}: ${problem}`);
     if (WORD_CHECKS[name]) {
       const problem = WORD_CHECKS[name](wordParts(buf));

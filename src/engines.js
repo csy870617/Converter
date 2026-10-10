@@ -404,12 +404,20 @@ function pageParagraphs(items) {
   return paragraphs;
 }
 
-// PDF → Word는 따로 된 작업자(src/pdf2word)에서 pdf2docx로 한다. 처음 한 번 엔진(약 40MB)을 받는다.
+// PDF → Word·용량 줄이기·표 꺼내기는 따로 된 작업자(src/pdf2word, 브라우저용 파이썬)에서 한다.
+// 처음 한 번 엔진(용량 줄이기·표는 약 20MB, Word는 약 40MB)을 받는다.
 let pdfWorker = null;
 let pdfJob = 0;
 
-function pdfToWord(file, ctx) {
-  ctx.status('준비 중… (처음 한 번 1~2분)');
+const PDF_TASK_ERRORS = {
+  docx: 'PDF를 Word로 바꾸지 못했습니다. 손상되었거나 특수한 PDF일 수 있습니다.',
+  compress: 'PDF 용량을 줄이지 못했습니다. 손상되었거나 특수한 PDF일 수 있습니다.',
+  tables: 'PDF에서 표를 꺼내지 못했습니다. 손상되었거나 특수한 PDF일 수 있습니다.',
+};
+
+/** 작업자에게 PDF 일을 맡긴다. task: 'docx' | 'compress' | 'tables' */
+function pdfTask(file, task, ctx, working = '변환 중…') {
+  ctx.status(task === 'docx' ? '준비 중… (처음 한 번 1~2분)' : '준비 중…');
   if (!pdfWorker) pdfWorker = new Worker(new URL('./pdf2word/worker.js', import.meta.url), { type: 'module' });
   const worker = pdfWorker;
   const id = ++pdfJob;
@@ -423,17 +431,15 @@ function pdfToWord(file, ctx) {
       if (m.id !== id) return;
       if (m.type === 'progress') {
         if (m.stage === 'load') ctx.status(`준비 중… ${Math.round(m.value * 100)}%`);
-        else { ctx.status('변환 중…'); ctx.progress(m.value); }
+        else { ctx.status(working); ctx.progress(m.value); }
       } else if (m.type === 'done') {
         done();
         resolve(m);
       } else if (m.type === 'error') {
         done();
         if (m.code === 'load') { reset(); reject(new ConvertError(LOAD_FAILED)); return; }
-        console.warn('PDF→Word 오류', m.message);
-        reject(new ConvertError(m.code === 'password'
-          ? '암호가 걸린 PDF는 변환할 수 없습니다.'
-          : 'PDF를 Word로 바꾸지 못했습니다. 손상되었거나 특수한 PDF일 수 있습니다.'));
+        console.warn(`PDF 작업(${task}) 오류`, m.message);
+        reject(new ConvertError(m.code === 'password' ? '암호가 걸린 PDF는 변환할 수 없습니다.' : PDF_TASK_ERRORS[task]));
       }
     };
     const onError = (e) => {
@@ -445,18 +451,83 @@ function pdfToWord(file, ctx) {
     worker.addEventListener('message', onMessage);
     worker.addEventListener('error', onError);
     file.arrayBuffer().then((buffer) => {
-      worker.postMessage({ id, base: new URL('.', document.baseURI).href, buffer }, [buffer]);
+      worker.postMessage({ id, task, base: new URL('.', document.baseURI).href, buffer }, [buffer]);
     }, (e) => { done(); reject(e); });
   });
+}
+
+const prettyMB = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}MB` : `${Math.max(1, Math.round(n / 1e3))}KB`);
+
+/** pdf-lib으로 PDF를 연다 (암호·손상 안내 포함) */
+async function loadPdfLib(file) {
+  const { PDFDocument } = await import('pdf-lib');
+  try {
+    return { PDFDocument, doc: await PDFDocument.load(await file.arrayBuffer(), { updateMetadata: false }) };
+  } catch (e) {
+    if (/encrypt/i.test(String(e?.message))) throw new ConvertError('암호가 걸린 PDF는 다룰 수 없습니다.');
+    throw new ConvertError('PDF를 열 수 없습니다. 손상된 파일일 수 있습니다.');
+  }
+}
+
+/** 여러 PDF를 목록 순서대로 하나로 합친다. */
+export async function mergePdfs(files, name, ctx) {
+  const { PDFDocument } = await import('pdf-lib');
+  const merged = await PDFDocument.create();
+  for (const [i, file] of files.entries()) {
+    ctx.status(`합치는 중… (${i + 1}/${files.length})`);
+    let doc;
+    try {
+      ({ doc } = await loadPdfLib(file));
+    } catch (e) {
+      throw new ConvertError(`${file.name}: ${e.message}`);
+    }
+    for (const page of await merged.copyPages(doc, doc.getPageIndices())) merged.addPage(page);
+    ctx.progress((i + 1) / files.length);
+  }
+  return out(name, 'pdf', new Blob([await merged.save()], { type: MIME.pdf }));
 }
 
 async function convertPdf(file, target, ctx) {
   const stem = stemOf(file.name);
   if (target === 'docx') {
-    const { buffer, failed } = await pdfToWord(file, ctx);
+    const { buffer, failed } = await pdfTask(file, 'docx', ctx);
     const result = out(stem, 'docx', new Blob([buffer], { type: MIME.docx }));
     if (failed?.length) result.warning = `${failed.join(', ')}쪽은 변환하지 못해 빠졌습니다.`;
     return [result];
+  }
+  if (target === 'compress') {
+    const { buffer } = await pdfTask(file, 'compress', ctx, '줄이는 중…');
+    if (buffer.byteLength >= file.size * 0.97) {
+      const result = out(`${stem}_압축`, 'pdf', file);
+      result.note = '이미 작게 만들어진 PDF라 더 줄이지 못했습니다. 원본과 같은 파일입니다.';
+      return [result];
+    }
+    const result = out(`${stem}_압축`, 'pdf', new Blob([buffer], { type: MIME.pdf }));
+    result.note = `${prettyMB(file.size)} → ${prettyMB(buffer.byteLength)} (${Math.round((1 - buffer.byteLength / file.size) * 100)}% 줄임)`;
+    return [result];
+  }
+  if (target === 'xlsx') {
+    const { tables } = await pdfTask(file, 'tables', ctx, '표를 찾는 중…');
+    if (!tables.length) throw new ConvertError('PDF에서 글자를 찾지 못했습니다. 사진으로 찍은(스캔한) PDF는 표를 꺼낼 수 없습니다.');
+    const { makeXlsx, tablesToSheets } = await import('./xlsx.js');
+    const result = out(stem, 'xlsx', new Blob([makeXlsx(tablesToSheets(tables))], { type: MIME.xlsx }));
+    if (tables.every((t) => t.text)) result.note = '표 모양을 찾지 못해 글줄마다 한 행으로 넣었습니다.';
+    return [result];
+  }
+  if (target === 'split') {
+    ctx.status('나누는 중…');
+    const { PDFDocument, doc: src } = await loadPdfLib(file);
+    const count = src.getPageCount();
+    const digits = String(count).length;
+    const results = [];
+    for (let i = 0; i < count; i++) {
+      const one = await PDFDocument.create();
+      const [page] = await one.copyPages(src, [i]);
+      one.addPage(page);
+      results.push(out(`${stem}-${String(i + 1).padStart(digits, '0')}`, 'pdf', new Blob([await one.save()], { type: MIME.pdf })));
+      ctx.progress((i + 1) / count);
+    }
+    return results;
   }
   const { doc, close } = await openPdf(file);
   try {
@@ -599,7 +670,8 @@ const SIGNATURES = {
 };
 // doc/xls는 실제로는 HTML·RTF인 경우(은행 거래내역 등)가 많아 검사하지 않는다.
 const EXPECTED_SIGNATURE = {
-  docx: 'zip', xlsx: 'zip', pptx: 'zip', odt: 'zip', ods: 'zip', odp: 'zip', ppt: 'ole',
+  docx: 'zip', docm: 'zip', dotx: 'zip', xlsx: 'zip', xlsm: 'zip', xlsb: 'zip', pptx: 'zip', pptm: 'zip', ppsx: 'zip',
+  odt: 'zip', ods: 'zip', odp: 'zip', ppt: 'ole', pps: 'ole',
 };
 
 async function checkDocument(file) {
@@ -610,7 +682,14 @@ async function checkDocument(file) {
   if (!ok) throw new ConvertError('문서를 열 수 없습니다. 파일이 손상되었거나 확장자가 실제 형식과 다릅니다.');
 }
 
-async function convertOffice(file, target, { status, progress }) {
+async function convertOffice(file, target, ctx) {
+  // 쪽마다 그림(JPG·PNG): PDF로 바꾼 뒤 쪽을 그린다
+  if (target === 'jpg' || target === 'png') {
+    const [pdf] = await convertOffice(file, 'pdf', { ...ctx, progress: (p) => ctx.progress(p * 0.7) });
+    const pdfFile = new File([pdf.blob], `${stemOf(file.name)}.pdf`, { type: MIME.pdf });
+    return convertPdf(pdfFile, target, { ...ctx, progress: (p) => ctx.progress(0.7 + p * 0.3) });
+  }
+  const { status, progress } = ctx;
   await checkDocument(file);
   // 문서가 쓰는 글꼴이 이 컴퓨터에 있으면(허락한 경우) 그 글꼴로 그린다
   let localFonts = [];

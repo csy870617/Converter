@@ -63,6 +63,8 @@ h1 { font-size: 26px; margin: 0; }
 #files .state.err { color: var(--danger); }
 #files button { border: 0; background: none; color: var(--muted); cursor: pointer; font-size: 20px; padding: 0 4px; }
 #files button:hover { color: var(--danger); }
+#files button.up { font-size: 13px; }
+#files button.up:hover { color: var(--accent); }
 #files button:disabled { visibility: hidden; }
 
 #targets { display: flex; flex-wrap: wrap; gap: 8px; }

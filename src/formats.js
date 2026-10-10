@@ -17,8 +17,8 @@ export const CATEGORIES = [
   },
   {
     id: 'word', name: 'Word 문서', engine: 'office',
-    exts: ['doc', 'docx', 'odt', 'rtf', 'txt'],
-    targets: ['pdf', 'docx'],
+    exts: ['doc', 'docx', 'docm', 'dot', 'dotx', 'odt', 'rtf', 'txt'],
+    targets: ['pdf', 'docx', 'doc', 'odt', 'rtf', 'txt', 'jpg', 'png'],
   },
   {
     id: 'hwp', name: '한글 문서', engine: 'hwp',
@@ -27,26 +27,29 @@ export const CATEGORIES = [
   },
   {
     id: 'slide', name: '프레젠테이션', engine: 'office',
-    exts: ['ppt', 'pptx', 'odp'],
-    targets: ['pdf', 'pptx'],
+    exts: ['ppt', 'pptx', 'pptm', 'pps', 'ppsx', 'odp'],
+    targets: ['pdf', 'pptx', 'ppt', 'odp', 'jpg', 'png'],
   },
   {
     id: 'sheet', name: '스프레드시트', engine: 'office',
-    exts: ['xls', 'xlsx', 'ods', 'csv'],
-    targets: ['pdf', 'xlsx', 'csv'],
+    exts: ['xls', 'xlsx', 'xlsm', 'xlsb', 'ods', 'csv'],
+    targets: ['pdf', 'xlsx', 'xls', 'ods', 'csv'],
   },
   {
     id: 'pdf', name: 'PDF', engine: 'pdf',
     exts: ['pdf'],
-    targets: ['docx', 'jpg', 'png', 'txt'],
+    targets: ['docx', 'xlsx', 'jpg', 'png', 'txt', 'compress', 'split'],
   },
 ];
 
 /** AI 화질 개선(업스케일) 선택지: 배율 */
 export const UPSCALE = { up2: 2, up4: 4 };
 
+/** PDF 도구: 형식은 그대로 두고 손보는 것 (결과는 PDF) */
+export const TOOLS = { compress: '용량 줄이기', split: '쪽 나누기', merge: '하나로 합치기' };
+
 /** 화면에 보여줄 이름 */
-export const targetLabel = (t) => (UPSCALE[t] ? `고화질 ${UPSCALE[t]}배` : t.toUpperCase());
+export const targetLabel = (t) => (UPSCALE[t] ? `고화질 ${UPSCALE[t]}배` : TOOLS[t] || t.toUpperCase());
 
 const SAME = { jpeg: 'jpg', tif: 'tiff', heif: 'heic' };
 
@@ -73,6 +76,9 @@ export const MIME = {
   docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
   xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  doc: 'application/msword', rtf: 'application/rtf', xls: 'application/vnd.ms-excel', ppt: 'application/vnd.ms-powerpoint',
+  odt: 'application/vnd.oasis.opendocument.text', ods: 'application/vnd.oasis.opendocument.spreadsheet',
+  odp: 'application/vnd.oasis.opendocument.presentation',
   zip: 'application/zip',
 };
 
