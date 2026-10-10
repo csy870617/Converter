@@ -55,12 +55,20 @@ export const out = (name, ext, data) => ({ name: `${name}.${ext}`, blob: data in
 // 동영상 / 오디오 (ffmpeg.wasm)
 // ---------------------------------------------------------------------------
 
+const RINGTONE_SECONDS = 40; // 아이폰 벨소리는 40초까지만 쓸 수 있다
+
 const FFMPEG_ARGS = {
   mp3: ['-vn', '-c:a', 'libmp3lame', '-q:a', '2'],
   wav: ['-vn', '-c:a', 'pcm_s16le'],
   m4a: ['-vn', '-c:a', 'aac', '-b:a', '192k'],
+  aac: ['-vn', '-c:a', 'aac', '-b:a', '192k'],
   flac: ['-vn', '-c:a', 'flac'],
   ogg: ['-vn', '-c:a', 'libvorbis', '-q:a', '5'],
+  opus: ['-vn', '-c:a', 'libopus', '-b:a', '128k'],
+  m4r: ['-vn', '-t', String(RINGTONE_SECONDS), '-c:a', 'aac', '-b:a', '192k', '-f', 'ipod'],
+  avi: ['-c:v', 'mpeg4', '-vtag', 'xvid', '-q:v', '4', '-pix_fmt', 'yuv420p', '-c:a', 'libmp3lame', '-q:a', '4'],
+  webm: ['-c:v', 'libvpx', '-deadline', 'realtime', '-cpu-used', '8', '-crf', '10', '-b:v', '2M', '-auto-alt-ref', '0',
+    '-pix_fmt', 'yuv420p', '-c:a', 'libopus', '-b:a', '128k'],
   mp4: ['-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '24', '-pix_fmt', 'yuv420p',
     '-c:a', 'aac', '-b:a', '160k', '-movflags', '+faststart'],
   gif: ['-vf', "fps=10,scale='min(480,iw)':-2:flags=lanczos,split[a][b];[a]palettegen[p];[b][p]paletteuse", '-loop', '0'],
@@ -69,6 +77,7 @@ const FFMPEG_ARGS = {
 // 결과를 브라우저·휴대폰에서 바로 재생할 수 있게: 이 코덱들만 다시 압축하지 않고 그대로 MP4에 옮긴다.
 // (예: AVI 안의 옛날 코덱(Xvid)을 그대로 옮기면 크롬·엣지에서 재생되지 않는다)
 const MP4_COPY_AUDIO = ['aac', 'mp3'];
+const ENCODE_VIDEO = ['mp4', 'mov', 'gif', 'avi', 'webm']; // 영상을 다시 압축할 수 있는 변환 (여러 코어 ffmpeg)
 const EVEN = ['-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2']; // H.264는 가로·세로가 짝수여야 한다
 
 /** ffmpeg 정보(로그)에서 MP4로 옮기는 방법을 정한다. */
@@ -80,6 +89,19 @@ function mp4Plan(log) {
   // H.264는 일반 8비트 영상만(10비트·4:4:4는 재생 안 되는 기기가 많다), HEVC(아이폰 영상)는 애플 방식 표시를 붙여 옮긴다
   const copyVideo = (v === 'h264' && /yuvj?420p[(,\s]/.test(video)) || v === 'hevc';
   return { copyVideo, tag: v === 'hevc' ? ['-tag:v', 'hvc1'] : [], copyAudio: !a || MP4_COPY_AUDIO.includes(a) };
+}
+
+/** WEBM에 그대로 담을 수 있는지 (VP8·VP9·AV1 영상 + Opus·Vorbis 소리) */
+function webmCopy(log) {
+  const video = log.find((l) => /Stream #.*Video:/.test(l)) || '';
+  const audio = log.find((l) => /Stream #.*Audio:/.test(l));
+  return /Video: (vp8|vp9|av1)/.test(video) && (!audio || /Audio: (opus|vorbis)/.test(audio));
+}
+
+/** ffmpeg 정보에서 길이(초) */
+function duration(log) {
+  const m = /Duration: (\d+):(\d+):([\d.]+)/.exec(log.join('\n'));
+  return m ? Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3]) : 0;
 }
 
 let ffmpegPromise = null;
@@ -130,8 +152,8 @@ export function loadFFmpegThreaded(status) {
 }
 
 async function convertMedia(file, target, { status, progress }) {
-  // 영상을 다시 압축하는 변환(MP4·GIF)은 여러 코어를 쓰는 ffmpeg로 (2배 이상 빠르다)
-  const ff = await (target === 'mp4' || target === 'gif' ? loadFFmpegThreaded(status) : loadFFmpeg(status));
+  // 영상을 다시 압축하는 변환(MP4·GIF 등)은 여러 코어를 쓰는 ffmpeg로 (2배 이상 빠르다)
+  const ff = await (ENCODE_VIDEO.includes(target) ? loadFFmpegThreaded(status) : loadFFmpeg(status));
   const dir = `/job${++mediaJob}`;
   const input = `${dir}/${file.name}`;
   const output = `/out${mediaJob}.${target}`;
@@ -146,31 +168,45 @@ async function convertMedia(file, target, { status, progress }) {
   try {
     status('변환 중…');
     let code = 1;
-    if (target === 'mp4') {
+    let note = '';
+    await ff.exec(['-hide_banner', '-i', input]); // 정보만 읽는다 (출력이 없어 실패 코드는 정상)
+    const tryCopy = async (args) => {
+      code = await ff.exec(['-i', input, '-map', '0:v:0', '-map', '0:a:0?', ...args, output]);
+      if (code !== 0) await ff.deleteFile(output).catch(() => {});
+    };
+    if (target === 'mp4' || target === 'mov') {
       // 재생 호환되는 코덱(H.264·HEVC)이면 다시 압축하지 않고 담기만 한다 (훨씬 빠르고 화질 손실 없음)
-      await ff.exec(['-hide_banner', '-i', input]); // 정보만 읽는다 (출력이 없어 실패 코드는 정상)
       const plan = mp4Plan(log);
       if (plan.copyVideo) {
-        code = await ff.exec(['-i', input, '-map', '0:v:0', '-map', '0:a:0?', '-c:v', 'copy', ...plan.tag,
-          ...(plan.copyAudio ? ['-c:a', 'copy'] : ['-c:a', 'aac', '-b:a', '160k']), '-movflags', '+faststart', output]);
-        if (code !== 0) await ff.deleteFile(output).catch(() => {});
+        await tryCopy(['-c:v', 'copy', ...plan.tag, ...(plan.copyAudio ? ['-c:a', 'copy'] : ['-c:a', 'aac', '-b:a', '160k']),
+          '-movflags', '+faststart']);
       }
       if (code !== 0) {
         code = await ff.exec(['-i', input, '-map', '0:v:0', '-map', '0:a:0?', ...EVEN, ...FFMPEG_ARGS.mp4, output]);
       }
+    } else if (target === 'webm') {
+      if (webmCopy(log)) await tryCopy(['-c', 'copy']);
+      if (code !== 0) code = await ff.exec(['-i', input, '-map', '0:v:0', '-map', '0:a:0?', ...EVEN, ...FFMPEG_ARGS.webm, output]);
+    } else if (target === 'avi') {
+      code = await ff.exec(['-i', input, '-map', '0:v:0', '-map', '0:a:0?', ...EVEN, ...FFMPEG_ARGS.avi, output]);
     } else {
       code = await ff.exec(['-i', input, ...FFMPEG_ARGS[target], output]);
+      if (target === 'm4r' && duration(log) > RINGTONE_SECONDS + 0.5) {
+        note = `아이폰 벨소리는 ${RINGTONE_SECONDS}초까지만 쓸 수 있어 앞부분 ${RINGTONE_SECONDS}초만 담았습니다.`;
+      }
     }
     if (code !== 0) {
       console.warn('ffmpeg 기록', log.join('\n'));
       const video = categoryOf(file.name)?.id === 'video';
-      throw new ConvertError(video && FFMPEG_ARGS[target][0] === '-vn'
+      throw new ConvertError(video && FFMPEG_ARGS[target]?.[0] === '-vn'
         ? '변환하지 못했습니다. 파일이 손상되었거나 소리가 없는 영상일 수 있습니다.'
         : '변환하지 못했습니다. 파일이 손상되었을 수 있습니다.');
     }
     const data = await ff.readFile(output);
     await ff.deleteFile(output);
-    return [out(stemOf(file.name), target, data)];
+    const result = out(stemOf(file.name), target, data);
+    if (note) result.note = note;
+    return [result];
   } finally {
     ff.off('log', onLog);
     ff.off('progress', onProgress);
@@ -218,9 +254,126 @@ export function makeCanvas(w, h, limit = MAX_PIXELS) {
   return make(Math.sqrt(SAFE_PIXELS / (w * h)));
 }
 
+// SVG의 width·height 값(단위 포함)을 화면 점(px)으로
+const SVG_UNITS = { px: 1, pt: 4 / 3, pc: 16, mm: 96 / 25.4, cm: 96 / 2.54, in: 96 };
+function svgLength(value) {
+  const m = /^\s*([\d.]+)\s*(px|pt|pc|mm|cm|in)?\s*$/i.exec(value || '');
+  return m ? Number(m[1]) * SVG_UNITS[(m[2] || 'px').toLowerCase()] : 0;
+}
+
+/** SVG 파일을 읽어 그림 크기(px)와 함께 돌려준다. 크기가 없으면 viewBox로 정한다. */
+async function readSvg(file) {
+  const doc = new DOMParser().parseFromString(await file.text(), 'image/svg+xml');
+  const svg = doc.documentElement;
+  if (svg.nodeName !== 'svg' || doc.querySelector('parsererror')) throw new ConvertError('SVG 파일을 읽을 수 없습니다. 손상되었을 수 있습니다.');
+  const box = (svg.getAttribute('viewBox') || '').split(/[\s,]+/).map(Number);
+  const hasBox = box.length === 4 && box[2] > 0 && box[3] > 0;
+  let w = svgLength(svg.getAttribute('width'));
+  let h = svgLength(svg.getAttribute('height'));
+  if (!w && !h) [w, h] = hasBox ? [box[2], box[3]] : [300, 150];
+  else if (!w) w = hasBox ? (h * box[2]) / box[3] : h;
+  else if (!h) h = hasBox ? (w * box[3]) / box[2] : w;
+  if (!hasBox) svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
+  return { svg, width: w, height: h };
+}
+
+/** SVG → 그림. 작은 아이콘도 또렷하게 긴 변을 1,024px 이상으로 그린다. */
+async function decodeSvg(file) {
+  const { svg, width, height } = await readSvg(file);
+  const k = Math.min(8192 / Math.max(width, height), Math.max(1, 1024 / Math.max(width, height)));
+  svg.setAttribute('width', String(Math.round(width * k)));
+  svg.setAttribute('height', String(Math.round(height * k)));
+  const url = URL.createObjectURL(new Blob([new XMLSerializer().serializeToString(svg)], { type: 'image/svg+xml' }));
+  try {
+    const img = new Image();
+    img.src = url;
+    await img.decode();
+    return await createImageBitmap(img);
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+/** 글자가 없는 SVG → 확대해도 깨지지 않는 PDF (글자가 있으면 글꼴 문제로 그림으로 넣는다) */
+async function svgToPdf(file) {
+  const { svg, width, height } = await readSvg(file);
+  if (svg.querySelector('text, foreignObject')) return null;
+  const [{ jsPDF }, { svg2pdf }] = await Promise.all([import('jspdf'), import('svg2pdf.js')]);
+  const w = width * 0.75; // px → pt
+  const h = height * 0.75;
+  const pdf = new jsPDF({ unit: 'pt', format: [w, h], orientation: w > h ? 'landscape' : 'portrait', compress: true });
+  const holder = document.createElement('div');
+  holder.style.cssText = 'position:fixed;left:-100000px;top:0;width:10px;height:10px;overflow:hidden;visibility:hidden';
+  holder.append(svg);
+  document.body.append(holder);
+  try {
+    await svg2pdf(svg, pdf, { x: 0, y: 0, width: w, height: h });
+  } finally {
+    holder.remove();
+  }
+  return out(stemOf(file.name), 'pdf', pdf.output('blob'));
+}
+
+/** 24비트 BMP (투명한 곳은 흰색) */
+function makeBmp(canvas) {
+  const { width: w, height: h } = canvas;
+  const { data } = canvas.getContext('2d').getImageData(0, 0, w, h);
+  const row = Math.ceil((w * 3) / 4) * 4;
+  const size = 54 + row * h;
+  const buf = new ArrayBuffer(size);
+  const v = new DataView(buf);
+  const u = new Uint8Array(buf);
+  u[0] = 0x42; // 'BM'
+  u[1] = 0x4d;
+  v.setUint32(2, size, true);
+  v.setUint32(10, 54, true);
+  v.setUint32(14, 40, true);
+  v.setInt32(18, w, true);
+  v.setInt32(22, h, true);
+  v.setUint16(26, 1, true);
+  v.setUint16(28, 24, true);
+  v.setUint32(34, row * h, true);
+  v.setInt32(38, 3780, true); // 96dpi
+  v.setInt32(42, 3780, true);
+  for (let y = 0; y < h; y++) {
+    let o = 54 + (h - 1 - y) * row; // 아래 줄부터
+    for (let x = 0; x < w; x++) {
+      const i = (y * w + x) * 4;
+      u[o++] = data[i + 2];
+      u[o++] = data[i + 1];
+      u[o++] = data[i];
+    }
+  }
+  return new Blob([buf], { type: MIME.bmp });
+}
+
+/** TIFF (압축 없음, 투명도 유지) */
+async function makeTiff(canvas) {
+  const UTIF = (await import('utif2')).default;
+  const { width: w, height: h } = canvas;
+  const { data } = canvas.getContext('2d').getImageData(0, 0, w, h);
+  return new Blob([UTIF.encodeImage(data.buffer, w, h, { t338: [2], t305: ['File Converter'] })], { type: MIME.tiff });
+}
+
+/** GIF (256색, 투명도 유지) */
+async function makeGif(canvas) {
+  const { GIFEncoder, quantize, applyPalette } = await import('gifenc');
+  const { width: w, height: h } = canvas;
+  const { data } = canvas.getContext('2d').getImageData(0, 0, w, h);
+  const transparent = data.some((v, i) => i % 4 === 3 && v < 128);
+  const palette = quantize(data, 256, transparent ? { format: 'rgba4444', oneBitAlpha: true } : {});
+  const index = applyPalette(data, palette, transparent ? 'rgba4444' : 'rgb565');
+  const clear = transparent ? palette.findIndex((c) => c[3] === 0) : -1;
+  const gif = GIFEncoder();
+  gif.writeFrame(index, w, h, { palette, transparent: clear >= 0, transparentIndex: Math.max(0, clear) });
+  gif.finish();
+  return new Blob([gif.bytes()], { type: MIME.gif });
+}
+
 export async function decodeImage(file) {
   const ext = extOf(file.name);
   try {
+    if (ext === 'svg') return await decodeSvg(file);
     if (ext === 'heic' || ext === 'heif') {
       const { heicTo } = await import('heic-to');
       return await heicTo({ blob: file, type: 'bitmap' });
@@ -306,11 +459,18 @@ async function imagesToPdf(files, name) {
   return out(name, 'pdf', await pdf.save());
 }
 
-async function convertImage(file, target) {
-  if (target === 'pdf') return [await imagesToPdf([file], stemOf(file.name))];
+async function convertImage(file, target, ctx) {
+  if (target === 'mp4') return convertMedia(file, 'mp4', ctx); // 움직이는 GIF → 동영상
+  if (target === 'pdf') {
+    const vector = extOf(file.name) === 'svg' ? await svgToPdf(file).catch((e) => { console.warn('SVG를 그림으로 넣습니다', e); return null; }) : null;
+    return [vector || await imagesToPdf([file], stemOf(file.name))];
+  }
   const bitmap = await decodeImage(file);
   let blob;
   if (target === 'ico') blob = await makeIco(bitmap);
+  else if (target === 'gif') blob = await makeGif(toCanvas(bitmap));
+  else if (target === 'bmp') blob = makeBmp(toCanvas(bitmap, { white: true }));
+  else if (target === 'tiff') blob = await makeTiff(toCanvas(bitmap));
   else if (target === 'jpg') blob = await canvasBlob(toCanvas(bitmap, { white: true }), 'image/jpeg', 0.92);
   else if (target === 'png') blob = await canvasBlob(toCanvas(bitmap), 'image/png');
   else if (target === 'webp') {
@@ -560,9 +720,11 @@ async function convertPdf(file, target, ctx) {
 // 문서 (LibreOffice WebAssembly)
 // ---------------------------------------------------------------------------
 
+// 나눔 글꼴에는 한자가 없어 한자만 담은 Noto 글꼴을 함께 넣는다.
 // fc_local.conf: 글꼴 대체표 (한글 글꼴 이름 → 나눔 글꼴 등). 엔진의 같은 이름 파일을 덮어쓴다.
 const LO_FILES = ['lo/soffice.wasm', 'lo/soffice.data'];
-const FONTS = ['NanumGothic-Regular.ttf', 'NanumGothic-Bold.ttf', 'NanumMyeongjo-Regular.ttf', 'NanumMyeongjo-Bold.ttf', 'fc_local.conf'];
+const FONTS = ['NanumGothic-Regular.ttf', 'NanumGothic-Bold.ttf', 'NanumMyeongjo-Regular.ttf', 'NanumMyeongjo-Bold.ttf',
+  'NotoSerifKR-Hanja.ttf', 'NotoSansKR-Hanja.ttf', 'fc_local.conf'];
 let officePromise = null;
 let officeConverter = null;
 const officeLocalFonts = []; // 엔진에 넣은 '내 컴퓨터 글꼴' ({filename, data, id})

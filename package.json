@@ -18,6 +18,7 @@
     "@matbee/libreoffice-converter": "^2.7.2",
     "@rhwp/core": "0.8.7",
     "fflate": "^0.8.3",
+    "gifenc": "^1.0.3",
     "heic-to": "^1.5.2",
     "jspdf": "^4.2.1",
     "mediabunny": "^1.61.0",

@@ -50,6 +50,14 @@ const MAGIC = {
   xls: (b) => b.readUInt32BE(0) === 0xd0cf11e0,
   ppt: (b) => b.readUInt32BE(0) === 0xd0cf11e0,
   rtf: (b) => b.subarray(0, 5).toString() === '{\\rtf',
+  bmp: (b) => b.subarray(0, 2).toString() === 'BM',
+  aac: (b) => b[0] === 0xff && (b[1] & 0xf6) === 0xf0,
+  opus: (b) => b.subarray(0, 4).toString() === 'OggS' && b.includes('OpusHead'),
+  m4r: (b) => b.subarray(4, 8).toString() === 'ftyp',
+  mov: (b) => b.subarray(4, 8).toString() === 'ftyp' && b.subarray(8, 10).toString() === 'qt',
+  avi: (b) => b.subarray(0, 4).toString() === 'RIFF' && b.subarray(8, 12).toString() === 'AVI ',
+  webm: (b) => b.readUInt32BE(0) === 0x1a45dfa3,
+  tiff: (b) => b.subarray(0, 4).toString('hex') === '4d4d002a' || b.subarray(0, 4).toString('hex') === '49492a00',
   pptx: (b) => b.subarray(0, 2).toString() === 'PK',
   xlsx: (b) => b.subarray(0, 2).toString() === 'PK',
   zip: (b) => b.subarray(0, 2).toString() === 'PK',
@@ -85,6 +93,8 @@ const WORD_CHECKS = {
 };
 // 한글 → PDF: 글자가 글자로 들어가고(굵은 글꼴·한자 글꼴), 띄어쓰기가 살아 있어야 한다
 const PDF_CHECKS = {
+  '한자문서.pdf': (b) => (b.includes('NotoSerifKRHanja') && b.includes('NotoSansKRHanja') ? null : '한자 글꼴로 그리지 않음 (한자가 빠짐)'),
+  '로고.pdf': (b) => (/\/Subtype\s*\/Image/.test(b) ? 'SVG가 그림으로 들어감 (선으로 그려야 함)' : null),
   '한글문서.pdf': (b) => (['NanumMyeongjo-Bold', 'HanjaSerif', 'Symbols'].every((f) => b.includes(f)) ? null : '굵은 글꼴·한자·기호 글꼴이 없음'),
 };
 const XLSX_CHECKS = {
@@ -125,6 +135,13 @@ const CASES = [
   [['노래.wav'], 'mp3', '노래.mp3'],
   [['노래.wav'], 'flac', '노래.flac'],
   [['노래.wav'], 'ogg', '노래.ogg'],
+  [['노래.wav'], 'aac', '노래.aac'],
+  [['노래.wav'], 'opus', '노래.opus'],
+  [['노래.wav'], 'm4r', '노래.m4r'], // 아이폰 벨소리
+  [['영상.mp4'], 'mov', '영상.mov'],
+  [['영상.mp4'], 'avi', '영상.avi'],
+  [['영상.mp4'], 'webm', '영상.webm'],
+  [['anim.gif'], 'mp4', 'anim.mp4'], // 움직이는 GIF → 동영상
   [['사진.jpg'], 'png', '사진.png'],
   [['투명.png'], 'jpg', '투명.jpg'],
   [['아이폰.heic'], 'jpg', '아이폰.jpg'],
@@ -133,6 +150,12 @@ const CASES = [
   [['pic.bmp'], 'webp', 'pic.webp'],
   [['anim.gif'], 'png', 'anim.png'],
   [['사진.jpg'], 'ico', '사진.ico'],
+  [['사진.jpg'], 'gif', '사진.gif'],
+  [['투명.png'], 'gif', '투명.gif'], // 투명한 곳 유지
+  [['사진.jpg'], 'bmp', '사진.bmp'],
+  [['사진.jpg'], 'tiff', '사진.tiff'],
+  [['로고.svg'], 'png', '로고.png', 1024], // 작은 SVG도 크게
+  [['로고.svg'], 'pdf', '로고.pdf'], // 확대해도 깨지지 않는 PDF
   [['사진.jpg'], 'pdf', '사진.pdf'],
   [['사진.jpg', '투명.png', '아이폰.heic'], 'pdf', '사진.pdf'], // 합치기
   [['사진.jpg', '투명.png'], 'webp', '변환결과.zip'],
@@ -160,6 +183,7 @@ const CASES = [
   [['띄어쓰기없음.pdf'], 'docx', '띄어쓰기없음.docx'], // 띄어쓰기 글자 없이 위치로만 띄운 한글 PDF
   [['2단논문.pdf'], 'docx', '2단논문.docx'],
   [['내글꼴.docx'], 'pdf', '내글꼴.pdf'], // 내 컴퓨터 글꼴(허락한 경우)로 그리기
+  [['한자문서.docx'], 'pdf', '한자문서.pdf'], // 나눔 글꼴에 없는 한자
   [['한글문서.hwp'], 'pdf', '한글문서.pdf'], // 한글: 굵은 글씨·한자·기호·표
   [['한글문서.hwpx'], 'docx', '한글문서.docx'],
   [['한글문서.hwp'], 'txt', '한글문서.txt'],
