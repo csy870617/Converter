@@ -142,11 +142,32 @@ function imageWidth(b) {
   return 0;
 }
 
-const LABEL = { up2: '고화질 2배', up4: '고화질 4배', compress: '용량 줄이기', split: '쪽 나누기', merge: '하나로 합치기' };
+const LABEL = { up2: '고화질 2배', up4: '고화질 4배', compress: '용량 줄이기', split: '쪽 나누기', merge: '하나로 합치기',
+  rotr: '오른쪽으로 돌리기', rotl: '왼쪽으로 돌리기', unlock: '암호 풀기', protect: '암호 걸기' };
+const STRENGTH = { original: '원본', natural: '자연스럽게', strong: '강하게' };
 const UPSCALE = ['up2', 'up4'];
 const pdfPages = async (b) => (await PDFDocument.load(b)).getPageCount();
+const NEW_PASSWORD = '5678'; // '암호 걸기' 시험에서 거는 암호
 
-// [입력 파일들, 변환 형식, 예상 결과 파일 이름, 예상 가로 크기, 동영상 코덱 강제, AI 세기 '강하게']
+/** 암호를 건 PDF: 암호 없이는 열리지 않고, 건 암호로는 열려야 한다 */
+async function checkProtected(buf) {
+  const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
+  const open = (password) => pdfjs.getDocument({ data: new Uint8Array(buf), password, verbosity: 0 }).promise;
+  try {
+    await open(undefined);
+    return '암호 없이도 열림';
+  } catch (e) {
+    if (e?.name !== 'PasswordException') return `암호 없이 열 때 예상 밖의 오류: ${e?.message}`;
+  }
+  const doc = await open(NEW_PASSWORD);
+  if (!doc.numPages) return '건 암호로 열었는데 쪽이 없음';
+  return null;
+}
+
+// 용량 줄이기: 이 결과들은 원본보다 작아야 한다 (나머지는 원본이 이미 작아 원본을 그대로 줄 수도 있다)
+const SMALLER = ['pic_압축.png', '노래_압축.mp3', 'old_압축.mp4', '무음영상_압축.mp4'];
+
+// [입력 파일들, 변환 형식, 예상 결과 파일 이름, 예상 가로 크기, 동영상 코덱 강제, AI 세기(기본 'natural')]
 const CASES = [
   [['영상.mp4'], 'mp3', '영상.mp3'],
   [['영상.mp4'], 'wav', '영상.wav'],
@@ -222,11 +243,16 @@ const CASES = [
   [['성적.xlsx'], 'ods', '성적.ods'],
   [['보고서.pdf'], 'xlsx', '보고서.xlsx'], // PDF 표 → 엑셀
   [['보고서.pdf'], 'compress', '보고서_압축.pdf'], // PDF 도구
+  [['두쪽.pdf'], 'rotr', '두쪽_회전.pdf'],
   [['두쪽.pdf'], 'split', '변환결과.zip'],
+  [['보고서.pdf'], 'protect', '보고서_암호.pdf'],
+  [['보고서.pdf'], 'unlock', null], // 암호가 없는 PDF는 그렇다고 알려야 한다
   [['두쪽.pdf', '보고서.pdf'], 'merge', '두쪽_합침.pdf'],
   [['암호.pdf'], 'txt', '암호.txt'], // 암호를 물어 변환 (처음엔 틀린 암호를 넣어 다시 묻는지도 본다)
   [['암호.pdf'], 'xlsx', '암호.xlsx'],
   [['암호.pdf', '보고서.pdf'], 'merge', '암호_합침.pdf'],
+  [['암호.pdf'], 'unlock', '암호_암호해제.pdf'],
+  [['암호.pdf'], 'protect', '암호_암호.pdf'], // 원래 암호를 풀고 새 암호를 건다
   [['암호.docx'], 'pdf', '암호.pdf'],
   [['암호.hwp'], 'pdf', '암호.pdf'],
   [['사진.jpg'], 'up2', '사진_고화질2배.jpg', 1600],
@@ -234,8 +260,17 @@ const CASES = [
   [['작은영상.mp4'], 'up4', '작은영상_고화질4배.mp4'], // 하드웨어 인코더가 없을 때 (ffmpeg 인코딩)
   [['작은영상.mp4'], 'up2', '작은영상_고화질2배.mp4', null, 'vp9'], // ffmpeg로 풀고 브라우저 인코더로 묶기. 크로미움엔 H.264가 없어 VP9로 확인
   [['작은영상.webm'], 'up2', '작은영상_고화질2배.mp4', null, 'vp9'], // 브라우저만으로 풀고 묶기 (ffmpeg 없이)
-  [['사진.jpg'], 'up2', '사진_고화질2배_강하게.jpg', 1600, null, true],
-  [['작은영상.webm'], 'up4', '작은영상_고화질4배_강하게.mp4', null, 'vp9', true],
+  [['사진.jpg'], 'up2', '사진_고화질2배_강하게.jpg', 1600, null, 'strong'],
+  [['작은영상.webm'], 'up4', '작은영상_고화질4배_강하게.mp4', null, 'vp9', 'strong'],
+  [['사진.jpg'], 'up2', '사진_고화질2배_원본충실.jpg', 1600, null, 'original'],
+  [['pic.bmp'], 'compress', 'pic_압축.png'], // 색이 적은 그림 → 256색 PNG
+  [['사진.jpg'], 'compress', '사진_압축.jpg'],
+  [['투명.png'], 'compress', '투명_압축.png'], // 투명한 곳 유지
+  [['노래.wav'], 'compress', '노래_압축.mp3'],
+  [['old.avi'], 'compress', 'old_압축.mp4'], // ffmpeg로
+  [['무음영상.webm'], 'compress', '무음영상_압축.mp4', null, 'vp9'], // 브라우저만으로 (크로미움엔 H.264가 없어 VP9로 확인)
+  [['사진.jpg'], 'rotl', '사진_회전.jpg', 600], // 800×600 → 600×800
+  [['아이폰.heic'], 'rotr', '아이폰_회전.jpg'],
 ];
 
 const only = process.argv[2] ? new RegExp(process.argv[2]) : null;
@@ -260,18 +295,18 @@ await page.goto(url);
 await page.waitForFunction(() => self.crossOriginIsolated, null, { timeout: 30000 });
 
 let failed = 0;
-for (const [inputs, target, expected, width, codec, strong] of CASES) {
-  const label = `${inputs.join(' + ')} → ${LABEL[target] || target.toUpperCase()}${strong ? ' 강하게' : ''}${codec ? ` (${codec})` : ''}`;
+for (const [inputs, target, expected, width, codec, strength = 'natural'] of CASES) {
+  const label = `${inputs.join(' + ')} → ${LABEL[target] || target.toUpperCase()}${strength !== 'natural' ? ` ${STRENGTH[strength]}` : ''}${codec ? ` (${codec})` : ''}`;
   if (only && !only.test(label)) continue;
   const started = Date.now();
   try {
     await page.reload();
-    await page.evaluate((c) => (c ? localStorage.setItem('upscale-codec', c) : localStorage.removeItem('upscale-codec')), codec ?? null);
+    await page.evaluate((c) => (c ? localStorage.setItem('video-codec', c) : localStorage.removeItem('video-codec')), codec ?? null);
     await page.setInputFiles('#picker', inputs.map((name) => ({
       name, mimeType: 'application/octet-stream', buffer: fs.readFileSync(path.join(fixtures, name)),
     })));
-    await page.getByRole('button', LABEL[target] ? { name: LABEL[target] } : { name: target.toUpperCase(), exact: true }).click();
-    if (UPSCALE.includes(target)) await page.getByRole('button', { name: strong ? '강하게' : '자연스럽게', exact: true }).click();
+    await page.getByRole('button', LABEL[target] ? { name: LABEL[target], exact: !UPSCALE.includes(target) } : { name: target.toUpperCase(), exact: true }).click();
+    if (UPSCALE.includes(target)) await page.getByRole('button', { name: STRENGTH[strength], exact: true }).click();
     if (expected === null) {
       await page.click('#go');
       await page.waitForSelector('#msg.err', { timeout: 600000 });
@@ -283,13 +318,24 @@ for (const [inputs, target, expected, width, codec, strong] of CASES) {
     const downloading = page.waitForEvent('download', { timeout: 600000 });
     downloading.catch(() => {}); // 아래에서 먼저 실패해도 처리되지 않은 오류로 멈추지 않게
     await page.click('#go');
+    if (target === 'protect') {
+      // 걸 암호 정하기: 두 번 다르게 치면 다시 묻고, 같게 치면 진행한다
+      const [first, again] = [page.locator('.newpass input').nth(0), page.locator('.newpass input').nth(1)];
+      await first.fill(NEW_PASSWORD);
+      await again.fill('9999');
+      await page.click('.newpass button[type=submit]');
+      await page.waitForSelector('text=두 암호가 서로 다릅니다');
+      await again.fill(NEW_PASSWORD);
+      await page.click('.newpass button[type=submit]');
+    }
     if (inputs.some((n) => n.startsWith('암호'))) {
       // 틀린 암호 → '맞지 않습니다' 안내 → 맞는 암호
-      await page.fill('.password input', '0000', { timeout: 120000 });
-      await page.click('.password button[type=submit]');
+      const ask = '.password:not(.newpass)';
+      await page.fill(`${ask} input`, '0000', { timeout: 120000 });
+      await page.click(`${ask} button[type=submit]`);
       await page.waitForSelector('text=암호가 맞지 않습니다', { timeout: 120000 });
-      await page.fill('.password input', '1234');
-      await page.click('.password button[type=submit]');
+      await page.fill(`${ask} input`, '1234');
+      await page.click(`${ask} button[type=submit]`);
     }
     // 오류 메시지가 뜨면 기다리지 않고 바로 실패 처리
     const download = await Promise.race([
@@ -308,6 +354,22 @@ for (const [inputs, target, expected, width, codec, strong] of CASES) {
     const problem = PDF_CHECKS[name]?.(buf.toString('latin1')) || TXT_CHECKS[name]?.(buf.toString('utf8'))
       || XLSX_CHECKS[name]?.(unzipSync(new Uint8Array(buf)));
     if (name === '두쪽_합침.pdf' && (await pdfPages(buf)) !== 4) throw new Error(`합친 PDF가 ${await pdfPages(buf)}쪽 (기대: 4쪽)`);
+    if (name === '두쪽_회전.pdf') {
+      const angles = (await PDFDocument.load(buf)).getPages().map((p) => p.getRotation().angle);
+      if (angles.some((a) => a !== 90)) throw new Error(`돌린 쪽의 각도가 ${angles.join(', ')} (기대: 90)`);
+    }
+    if (name === '암호_암호해제.pdf') {
+      if (buf.includes('/Encrypt')) throw new Error('암호가 남아 있음');
+      await PDFDocument.load(buf);
+    }
+    if (target === 'protect') {
+      const problem = await checkProtected(buf);
+      if (problem) throw new Error(`${name}: ${problem}`);
+    }
+    if (SMALLER.includes(name)) {
+      const size = fs.statSync(path.join(fixtures, inputs[0])).size;
+      if (buf.length >= size) throw new Error(`${name}이(가) 줄지 않음 (${size} → ${buf.length} bytes)`);
+    }
     if (problem) throw new Error(`${name}: ${problem}`);
     if (WORD_CHECKS[name]) {
       const problem = WORD_CHECKS[name](wordParts(buf));

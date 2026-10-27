@@ -7,8 +7,18 @@ import { localFontsSupported, requestLocalFonts } from './localfonts.js';
 // 화면
 // ---------------------------------------------------------------------------
 const $ = (id) => document.getElementById(id);
-const state = { files: [], target: null, busy: false, status: new Map(), strong: false };
-try { state.strong = localStorage.getItem('upscale-strength') === 'strong'; } catch { /* 저장 불가해도 동작 */ }
+// AI 화질 개선 세기: 'original'(원본) | 'natural'(자연스럽게) | 'strong'(강하게)
+const STRENGTHS = ['original', 'natural', 'strong'];
+const STRENGTH_NOTES = {
+  original: '원본의 결(잡음·필름 입자·압축 흔적)까지 그대로 살려 키웁니다. AI가 지우거나 바꾸는 것이 가장 적어요.',
+  natural: '원본은 그대로 두고 흐릿한 부분만 선명하게, 압축 때문에 생긴 얼룩은 깨끗하게 합니다.',
+  strong: '자연스럽게에 윤곽을 한 번 더 또렷하게 합니다. 1080p처럼 이미 괜찮은 영상에서 차이가 잘 보여요.',
+};
+const state = { files: [], target: null, busy: false, status: new Map(), strength: 'natural' };
+try {
+  const saved = localStorage.getItem('upscale-strength');
+  if (STRENGTHS.includes(saved)) state.strength = saved;
+} catch { /* 저장 불가해도 동작 */ }
 let lastUrl = null;
 let downloads = 0; // 이 페이지에서 자동으로 내려받은 횟수
 let clickedAt = 0; // '변환하기'를 누른 시각
@@ -48,7 +58,7 @@ function render() {
   }
   common ??= [];
   // PDF 여러 개: 하나로 합치기
-  if (usable.length > 1 && usable.every((f) => extOf(f.name) === 'pdf')) common.push('merge');
+  if (usable.length > 1 && allPdf(usable)) common.push('merge');
   if (!common.includes(state.target)) state.target = common.length === 1 ? common[0] : null;
 
   const ul = $('files');
@@ -104,7 +114,7 @@ function render() {
     if (TOOLS[t] && !box.querySelector('.tool')) {
       const row = document.createElement('div');
       row.className = 'ai-row';
-      row.textContent = 'PDF 도구';
+      row.textContent = allPdf(usable) ? 'PDF 도구' : '도구';
       box.append(row);
     }
     const b = document.createElement('button');
@@ -133,11 +143,12 @@ function render() {
   $('officeNote').classList.toggle('hidden', !needsEngine);
   $('fontNote').classList.toggle('hidden', !(localFontsSupported() && usable.some((f) => categoryOf(f.name).engine === 'office')));
   const upscaling = !!UPSCALE[state.target];
+  $('upNote').textContent = STRENGTH_NOTES[state.strength];
   $('upNote').classList.toggle('hidden', !upscaling);
   // 세기 선택은 AI 화질 개선 버튼이 보이면 항상 함께 보여준다 (고르기 전에도 눈에 띄도록)
   $('strengthRow').classList.toggle('hidden', !common.some((t) => UPSCALE[t]));
   for (const b of document.querySelectorAll('[data-strength]')) {
-    b.setAttribute('aria-pressed', String((b.dataset.strength === 'strong') === state.strong));
+    b.setAttribute('aria-pressed', String(b.dataset.strength === state.strength));
     b.disabled = state.busy;
   }
   $('upVideoNote').classList.toggle('hidden', !(upscaling && usable.some((f) => categoryOf(f.name).id === 'video')));
@@ -147,10 +158,12 @@ function render() {
   if (!state.busy) {
     if (!state.target) go.textContent = '변환하기';
     else if (UPSCALE[state.target]) go.textContent = `${targetLabel(state.target)}로 화질 높이기`;
-    else if (TOOLS[state.target]) go.textContent = `PDF ${targetLabel(state.target)}`;
+    else if (TOOLS[state.target]) go.textContent = `${allPdf(usable) ? 'PDF ' : ''}${targetLabel(state.target)}`;
     else go.textContent = `${state.target.toUpperCase()}(으)로 변환하기`;
   }
 }
+
+const allPdf = (usable) => usable.length > 0 && usable.every((f) => extOf(f.name) === 'pdf');
 
 /** 사진 여러 장 → PDF 한 개로 합치기 (체크 상자로 고른다) */
 function imagesToOnePdf(usable = usableFiles()) {
@@ -212,6 +225,55 @@ function askPassword(fileName, wrong) {
   });
 }
 
+/**
+ * PDF에 걸 새 암호를 정한다 (잘못 치지 않도록 두 번 입력). 정한 암호, 취소하면 null.
+ */
+function askNewPassword(count) {
+  return new Promise((resolve) => {
+    const msg = $('msg');
+    msg.className = 'ask';
+    const form = document.createElement('form');
+    form.className = 'password newpass';
+    const text = document.createElement('p');
+    text.textContent = `🔒 ${count > 1 ? `PDF ${count}개에` : 'PDF에'} 걸 암호를 정해 주세요. 열 때마다 이 암호를 물어요.`;
+    const input = document.createElement('input');
+    const again = document.createElement('input');
+    for (const [el, label] of [[input, '새 암호'], [again, '새 암호 한 번 더']]) {
+      el.type = 'password';
+      el.autocomplete = 'new-password';
+      el.required = true;
+      el.placeholder = label;
+      el.setAttribute('aria-label', label);
+    }
+    const ok = document.createElement('button');
+    ok.type = 'submit';
+    ok.textContent = '암호 걸기';
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'skip';
+    cancel.textContent = '취소';
+    const warn = document.createElement('p');
+    warn.className = 'warn hidden';
+    warn.textContent = '두 암호가 서로 다릅니다. 다시 입력해 주세요.';
+    const row = document.createElement('div');
+    row.append(input, again, ok, cancel);
+    form.append(text, row, warn);
+    form.onsubmit = (e) => {
+      e.preventDefault();
+      if (input.value !== again.value) {
+        warn.classList.remove('hidden');
+        again.value = '';
+        again.focus();
+        return;
+      }
+      resolve(input.value);
+    };
+    cancel.onclick = () => resolve(null);
+    msg.replaceChildren(form);
+    input.focus();
+  });
+}
+
 function setBar(mode, pct = 0) {
   const bar = $('bar');
   bar.classList.toggle('show', !!mode);
@@ -267,6 +329,19 @@ async function run() {
   $('go').textContent = '변환 중…';
   render();
 
+  // 암호 걸기: 걸 암호를 먼저 정한다 (여러 파일이면 모두 같은 암호)
+  let newPassword = null;
+  if (target === 'protect') {
+    newPassword = await askNewPassword(files.length);
+    if (newPassword === null) {
+      state.busy = false;
+      render();
+      setMsg('암호를 정하지 않아 취소했습니다.');
+      return;
+    }
+    clickedAt = performance.now(); // 암호를 넣느라 걸린 시간 때문에 결과를 자동으로 못 받는 일이 없게
+  }
+
   const results = [];
   const errors = [];
   const passwords = new Map(); // 파일 이름 → 입력한 암호 (이번 변환 동안만 기억한다)
@@ -284,7 +359,8 @@ async function run() {
     const ctx = {
       status: (text) => { setMsg(`${prefix}${text}`); setBar('busy'); },
       progress: (p) => { setBar('progress', p); setState(`${Math.round(p * 100)}%`); },
-      strong: state.strong,
+      strength: state.strength,
+      newPassword,
       passwordFor: (name) => passwords.get(name),
     };
     setState('변환 중…');
@@ -367,8 +443,8 @@ showTheme();
 // AI 화질 개선 세기 (고른 것은 기억한다)
 for (const b of document.querySelectorAll('[data-strength]')) {
   b.onclick = () => {
-    state.strong = b.dataset.strength === 'strong';
-    try { localStorage.setItem('upscale-strength', state.strong ? 'strong' : 'natural'); } catch { /* 저장 불가해도 동작 */ }
+    state.strength = b.dataset.strength;
+    try { localStorage.setItem('upscale-strength', state.strength); } catch { /* 저장 불가해도 동작 */ }
     render();
   };
 }

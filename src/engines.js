@@ -1,6 +1,6 @@
 // 실제 변환 엔진. 모든 변환은 브라우저 안에서 이루어지며 파일은 어디로도 전송되지 않는다.
 // 무거운 엔진(ffmpeg, LibreOffice, PDF.js 등)은 필요할 때 처음 한 번만 불러온다.
-import { ConvertError, MIME, PasswordError, UPSCALE, categoryOf, extOf, stemOf } from './formats.js';
+import { ConvertError, MIME, PasswordError, ROTATE, UPSCALE, categoryOf, extOf, stemOf } from './formats.js';
 import { localFontsFor } from './localfonts.js';
 
 export const asset = (path) => new URL(path, document.baseURI).href;
@@ -51,6 +51,33 @@ function downloadedPart(paths) {
 
 export const out = (name, ext, data) => ({ name: `${name}.${ext}`, blob: data instanceof Blob ? data : new Blob([data], { type: MIME[ext] }) });
 
+const prettyMB = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}MB` : `${Math.max(1, Math.round(n / 1e3))}KB`);
+
+/**
+ * 용량 줄이기 결과. 원본보다 3% 넘게 줄지 않았으면 원본을 그대로 주고, 줄었으면 얼마나 줄었는지 알려 준다.
+ * (이미 작게 만들어진 파일을 다시 압축하면 화질만 나빠지고 오히려 커지기도 한다)
+ */
+function shrunk(file, ext, data) {
+  const blob = data instanceof Blob ? data : new Blob([data], { type: MIME[ext] });
+  const name = `${stemOf(file.name)}_압축`;
+  if (blob.size >= file.size * 0.97) {
+    const result = out(name, extOf(file.name), file);
+    result.note = '이미 작게 만들어진 파일이라 더 줄이지 못했습니다. 원본과 같은 파일입니다.';
+    return result;
+  }
+  const result = out(name, ext, blob);
+  result.note = `${prettyMB(file.size)} → ${prettyMB(blob.size)} (${Math.round((1 - blob.size / file.size) * 100)}% 줄임)`;
+  return result;
+}
+
+/** 원하는 코덱(기본 H.264, 테스트용 VP9)과 그 코덱을 브라우저가 이 크기·화질로 인코딩할 수 있는지. 못 하면 null. */
+export async function pickCodec(mb, w, h, quality) {
+  let codec = 'avc';
+  try { if (localStorage.getItem('video-codec') === 'vp9') codec = 'vp9'; } catch { /* 무시 */ }
+  const ok = await mb.canEncodeVideo(codec, { width: w, height: h, quality }).catch(() => false);
+  return ok ? codec : null;
+}
+
 // ---------------------------------------------------------------------------
 // 동영상 / 오디오 (ffmpeg.wasm)
 // ---------------------------------------------------------------------------
@@ -79,6 +106,33 @@ const FFMPEG_ARGS = {
 const MP4_COPY_AUDIO = ['aac', 'mp3'];
 const ENCODE_VIDEO = ['mp4', 'mov', 'gif', 'avi', 'webm']; // 영상을 다시 압축할 수 있는 변환 (여러 코어 ffmpeg)
 const EVEN = ['-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2']; // H.264는 가로·세로가 짝수여야 한다
+
+// 동영상 용량 줄이기: 화면이 1280×720(세로 영상은 720×1280)보다 크면 그만큼으로 줄이고 H.264로 다시 압축한다.
+// 휴대폰으로 보거나 메신저·메일로 보내기에 충분한 화질이고, 휴대폰 1080p·4K 영상은 보통 5~20분의 1로 준다.
+const SHRINK_LONG = 1280;
+const SHRINK_SHORT = 720;
+const SHRINK_K = `min(1,min(${SHRINK_LONG}/max(iw,ih),${SHRINK_SHORT}/min(iw,ih)))`;
+// (x264 'veryfast' 이상은 이 ffmpeg.wasm에서 'function signature mismatch'로 멈춘다. 'superfast'는 'ultrafast'보다 30~40% 더 작다)
+const SHRINK_VIDEO = ['-vf', `scale='trunc(iw*${SHRINK_K}/2)*2':'trunc(ih*${SHRINK_K}/2)*2'`,
+  '-c:v', 'libx264', '-preset', 'superfast', '-crf', '28', '-pix_fmt', 'yuv420p', '-movflags', '+faststart'];
+// 오디오 용량 줄이기: 같은 형식이면 같은 형식으로(128kbps 등), 무손실·옛 형식(WAV·FLAC·WMA …)은 어디서나 재생되는 MP3로
+const SHRINK_AUDIO = {
+  mp3: ['mp3', ['-c:a', 'libmp3lame', '-b:a', '128k']],
+  m4a: ['m4a', ['-c:a', 'aac', '-b:a', '128k']],
+  m4b: ['m4b', ['-c:a', 'aac', '-b:a', '128k', '-f', 'ipod']],
+  m4r: ['m4r', ['-c:a', 'aac', '-b:a', '128k', '-f', 'ipod']],
+  aac: ['aac', ['-c:a', 'aac', '-b:a', '128k']],
+  ogg: ['ogg', ['-c:a', 'libvorbis', '-q:a', '3']],
+  oga: ['ogg', ['-c:a', 'libvorbis', '-q:a', '3']],
+  opus: ['opus', ['-c:a', 'libopus', '-b:a', '64k']],
+};
+const SHRINK_AUDIO_OTHER = ['mp3', ['-c:a', 'libmp3lame', '-b:a', '128k']];
+
+/** 동영상을 줄일 크기 (긴 변 1280, 짧은 변 720 이하, 짝수) */
+function shrinkVideoSize(w, h) {
+  const k = Math.min(1, SHRINK_LONG / Math.max(w, h), SHRINK_SHORT / Math.min(w, h));
+  return [Math.max(2, Math.round((w * k) / 2) * 2), Math.max(2, Math.round((h * k) / 2) * 2)];
+}
 
 /** ffmpeg 정보(로그)에서 MP4로 옮기는 방법을 정한다. */
 function mp4Plan(log) {
@@ -151,12 +205,69 @@ export function loadFFmpegThreaded(status) {
   return ffmpegMtPromise;
 }
 
-async function convertMedia(file, target, { status, progress }) {
+/**
+ * 동영상 용량 줄이기의 빠른 길: 브라우저(그래픽카드)가 직접 풀고(디코딩) H.264로 다시 묶는다(인코딩).
+ * 풀 수 없거나 묶을 수 없는 형식이면 null (그때는 ffmpeg로 한다).
+ */
+async function shrinkVideoWebCodecs(file, { status, progress }) {
+  if (!('VideoEncoder' in self) || !('VideoDecoder' in self)) return null;
+  const mb = await import('mediabunny');
+  const input = new mb.Input({ source: new mb.BlobSource(file), formats: mb.ALL_FORMATS });
+  let conversion = null;
+  try {
+    let track;
+    try { track = await input.getPrimaryVideoTrack(); } catch { return null; }
+    if (!track || !(await track.canDecode())) return null;
+    const [w, h] = shrinkVideoSize(track.displayWidth, track.displayHeight);
+    // 화질 '보통'을 비트레이트로 맞춘다 (720p H.264 약 1.5Mbps). 양자화 방식은 영상에 따라 크기가 들쭉날쭉하다.
+    const quality = new mb.Quality({ quality: 'medium', preferBitrate: true });
+    const codec = await pickCodec(mb, w, h, quality);
+    if (!codec) return null;
+    const audio = await input.getPrimaryAudioTrack().catch(() => null);
+    const output = new mb.Output({ format: new mb.Mp4OutputFormat({ fastStart: 'in-memory' }), target: new mb.BufferTarget() });
+    conversion = await mb.Conversion.init({
+      input,
+      output,
+      tracks: 'primary',
+      showWarnings: false,
+      // 크기는 화면 방향(세로 영상은 세로) 기준. 세로는 가로에 맞춰 자동으로 정해진다.
+      video: { codec, width: w, quality, forceTranscode: true },
+      // 소리는 MP4에서 어디서나 재생되는 형식(AAC·MP3)이면 그대로 옮기고, 아니면 AAC로
+      audio: !audio || ['aac', 'mp3'].includes(audio.codec) ? {} : { codec: 'aac', bitrate: 128_000 },
+    });
+    // 소리를 옮길 수 없어 빠지게 되면 ffmpeg 길로 처리한다 (소리 없는 결과를 만들지 않는다)
+    if (!conversion.isValid || conversion.discardedTracks.some((d) => d.track.type === 'audio')) return null;
+    status('줄이는 중…');
+    conversion.onProgress = (p) => progress(p);
+    await conversion.execute();
+    return output.target.buffer;
+  } finally {
+    if (conversion && conversion.state === 'executing') await conversion.cancel?.().catch(() => {});
+    input.dispose?.();
+  }
+}
+
+async function convertMedia(file, target, ctx) {
+  const { status, progress } = ctx;
+  const video = categoryOf(file.name)?.id === 'video';
+  const shrink = target === 'compress';
+  if (shrink && video) {
+    // 크롬·엣지: 브라우저(그래픽카드)가 직접 풀고 묶는다. 훨씬 빠르고 ffmpeg를 받지 않아도 된다.
+    let data = null;
+    try {
+      data = await shrinkVideoWebCodecs(file, ctx);
+    } catch (e) {
+      console.warn('브라우저 동영상 처리 실패, ffmpeg로 다시 시도합니다', e);
+    }
+    if (data) return [shrunk(file, 'mp4', data)];
+  }
+  // 용량 줄이기의 결과 형식: 동영상은 MP4, 오디오는 원래 형식에 따라
+  const [to, audioArgs] = !shrink ? [target] : video ? ['mp4'] : SHRINK_AUDIO[extOf(file.name)] || SHRINK_AUDIO_OTHER;
   // 영상을 다시 압축하는 변환(MP4·GIF 등)은 여러 코어를 쓰는 ffmpeg로 (2배 이상 빠르다)
-  const ff = await (ENCODE_VIDEO.includes(target) ? loadFFmpegThreaded(status) : loadFFmpeg(status));
+  const ff = await (ENCODE_VIDEO.includes(target) || (shrink && video) ? loadFFmpegThreaded(status) : loadFFmpeg(status));
   const dir = `/job${++mediaJob}`;
   const input = `${dir}/${file.name}`;
-  const output = `/out${mediaJob}.${target}`;
+  const output = `/out${mediaJob}.${to}`;
   const log = [];
   const onLog = ({ message }) => { log.push(message); if (log.length > 200) log.shift(); };
   const onProgress = ({ progress: p }) => { if (p >= 0 && p <= 1) progress(p); };
@@ -189,6 +300,15 @@ async function convertMedia(file, target, { status, progress }) {
       if (code !== 0) code = await ff.exec(['-i', input, '-map', '0:v:0', '-map', '0:a:0?', ...EVEN, ...FFMPEG_ARGS.webm, output]);
     } else if (target === 'avi') {
       code = await ff.exec(['-i', input, '-map', '0:v:0', '-map', '0:a:0?', ...EVEN, ...FFMPEG_ARGS.avi, output]);
+    } else if (shrink && video) {
+      // 소리가 MP4에 담을 수 있는 형식이고 이미 작으면(160kbps 이하) 다시 압축하지 않고 옮긴다
+      const audio = log.find((l) => /Stream #.*Audio:/.test(l)) || '';
+      const kbps = Number(/(\d+) kb\/s/.exec(audio)?.[1] || Infinity);
+      const copyAudio = /Audio: (aac|mp3)/.test(audio) && kbps <= 160;
+      code = await ff.exec(['-i', input, '-map', '0:v:0', '-map', '0:a:0?', ...SHRINK_VIDEO,
+        ...(copyAudio ? ['-c:a', 'copy'] : ['-c:a', 'aac', '-b:a', '128k']), output]);
+    } else if (shrink) {
+      code = await ff.exec(['-i', input, '-vn', ...audioArgs, output]);
     } else {
       code = await ff.exec(['-i', input, ...FFMPEG_ARGS[target], output]);
       if (target === 'm4r' && duration(log) > RINGTONE_SECONDS + 0.5) {
@@ -197,13 +317,13 @@ async function convertMedia(file, target, { status, progress }) {
     }
     if (code !== 0) {
       console.warn('ffmpeg 기록', log.join('\n'));
-      const video = categoryOf(file.name)?.id === 'video';
       throw new ConvertError(video && FFMPEG_ARGS[target]?.[0] === '-vn'
         ? '변환하지 못했습니다. 파일이 손상되었거나 소리가 없는 영상일 수 있습니다.'
         : '변환하지 못했습니다. 파일이 손상되었을 수 있습니다.');
     }
     const data = await ff.readFile(output);
     await ff.deleteFile(output);
+    if (shrink) return [shrunk(file, to, data)];
     const result = out(stemOf(file.name), target, data);
     if (note) result.note = note;
     return [result];
@@ -459,8 +579,128 @@ async function imagesToPdf(files, name) {
   return out(name, 'pdf', await pdf.save());
 }
 
+// ---- 사진 용량 줄이기 ----
+
+const PHOTO_LONG = 2560; // 사진은 긴 변을 이만큼까지 줄인다 (화면·인쇄·업로드에 충분하다. 1,200만 화소 사진 → 약 500만 화소)
+const GRAPHIC_COLORS = 32_768; // 색 수가 이보다 적으면 사진이 아니라 그림(화면 캡처·로고·도표)으로 본다
+
+const CRC_TABLE = Uint32Array.from({ length: 256 }, (_, n) => {
+  let c = n;
+  for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+  return c;
+});
+
+function pngChunk(type, data) {
+  const chunk = new Uint8Array(12 + data.length);
+  const v = new DataView(chunk.buffer);
+  v.setUint32(0, data.length);
+  for (let i = 0; i < 4; i++) chunk[4 + i] = type.charCodeAt(i);
+  chunk.set(data, 8);
+  let crc = 0xffffffff;
+  for (let i = 4; i < 8 + data.length; i++) crc = CRC_TABLE[(crc ^ chunk[i]) & 0xff] ^ (crc >>> 8);
+  v.setUint32(8 + data.length, (crc ^ 0xffffffff) >>> 0);
+  return chunk;
+}
+
+/**
+ * 256색 PNG (팔레트 PNG). 색을 256가지로 줄여 보통 PNG의 3분의 1~5분의 1 크기가 된다.
+ * 화면 캡처·로고·도표는 눈으로 차이를 알기 어렵고, 투명한 곳도 그대로 남는다.
+ */
+async function makePng8(data, w, h, transparent) {
+  const [{ quantize, applyPalette }, { zlibSync }] = await Promise.all([import('gifenc'), import('fflate')]);
+  const format = transparent ? 'rgba4444' : 'rgb565';
+  const palette = quantize(data, 256, { format });
+  const index = applyPalette(data, palette, format);
+  const rows = new Uint8Array((w + 1) * h); // 줄마다 앞에 거르기 방식(0: 없음)을 붙인다
+  for (let y = 0; y < h; y++) rows.set(index.subarray(y * w, (y + 1) * w), y * (w + 1) + 1);
+  const ihdr = new Uint8Array(13);
+  const v = new DataView(ihdr.buffer);
+  v.setUint32(0, w);
+  v.setUint32(4, h);
+  ihdr[8] = 8; // 한 점에 8비트
+  ihdr[9] = 3; // 팔레트 색
+  const parts = [new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), pngChunk('IHDR', ihdr),
+    pngChunk('PLTE', Uint8Array.from(palette.flatMap((c) => [c[0], c[1], c[2]])))];
+  if (transparent) parts.push(pngChunk('tRNS', Uint8Array.from(palette.map((c) => c[3] ?? 255))));
+  parts.push(pngChunk('IDAT', zlibSync(rows, { level: 9 })), pngChunk('IEND', new Uint8Array(0)));
+  return new Blob(parts, { type: MIME.png });
+}
+
+/** 색 수가 적은 그림인지 (화면 캡처·로고 등). 사진은 색이 수십만 가지다. */
+function fewColors(data) {
+  const seen = new Set();
+  const step = Math.max(1, Math.floor(data.length / 4 / 2_000_000)) * 4; // 큰 사진은 200만 점만 본다
+  for (let i = 0; i < data.length; i += step) {
+    seen.add((data[i] << 16) | (data[i + 1] << 8) | data[i + 2]);
+    if (seen.size > GRAPHIC_COLORS) return false;
+  }
+  return true;
+}
+
+/**
+ * 사진 용량 줄이기. 긴 변을 2,560px까지 줄이고 다시 압축한다.
+ * - 사진: JPG(품질 80). WEBP는 WEBP로.
+ * - 투명한 그림이나 화면 캡처·로고 같은 PNG: 256색 PNG (글자가 번지지 않고 투명도도 남는다)
+ * 사진 속 촬영 위치(GPS) 같은 부가 정보도 함께 빠진다.
+ */
+async function compressImage(file) {
+  const bitmap = await decodeImage(file);
+  const k = Math.min(1, PHOTO_LONG / Math.max(bitmap.width, bitmap.height));
+  const canvas = makeCanvas(Math.max(1, Math.round(bitmap.width * k)), Math.max(1, Math.round(bitmap.height * k)));
+  const { width: w, height: h } = canvas;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(bitmap, 0, 0, w, h);
+  const { data } = ctx.getImageData(0, 0, w, h);
+  let transparent = false;
+  for (let p = 3; p < data.length; p += 4) if (data[p] < 255) { transparent = true; break; }
+  const ext = extOf(file.name);
+  if (transparent || (['png', 'bmp', 'tif', 'tiff'].includes(ext) && fewColors(data))) {
+    return shrunk(file, 'png', await makePng8(data, w, h, transparent));
+  }
+  if (ext === 'webp') {
+    const blob = await canvasBlob(canvas, 'image/webp', 0.75);
+    if (blob.type === 'image/webp') return shrunk(file, 'webp', blob);
+  }
+  return shrunk(file, 'jpg', await canvasBlob(canvas, 'image/jpeg', 0.8));
+}
+
+// ---- 사진 돌리기 ----
+
+// 돌린 결과의 형식: 원래 형식 그대로. 아이폰 사진(HEIC)은 JPG로, 투명할 수 있는 AVIF는 PNG로 저장한다.
+const ROTATED = { jpg: 'jpg', jpeg: 'jpg', jfif: 'jpg', jpe: 'jpg', heic: 'jpg', heif: 'jpg', png: 'png', avif: 'png',
+  webp: 'webp', bmp: 'bmp', tif: 'tiff', tiff: 'tiff' };
+
+async function rotateImage(file, angle) {
+  const bitmap = await decodeImage(file);
+  const turn = angle % 180 !== 0;
+  const canvas = makeCanvas(turn ? bitmap.height : bitmap.width, turn ? bitmap.width : bitmap.height);
+  const to = ROTATED[extOf(file.name)] || 'png';
+  const ctx = canvas.getContext('2d');
+  if (to === 'jpg' || to === 'bmp') {
+    ctx.fillStyle = '#fff'; // 투명도가 없는 형식
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+  }
+  ctx.imageSmoothingQuality = 'high';
+  ctx.translate(canvas.width / 2, canvas.height / 2);
+  ctx.rotate((angle * Math.PI) / 180);
+  const [dw, dh] = turn ? [canvas.height, canvas.width] : [canvas.width, canvas.height];
+  ctx.drawImage(bitmap, -dw / 2, -dh / 2, dw, dh);
+  const name = `${stemOf(file.name)}_회전`;
+  if (to === 'bmp') return out(name, 'bmp', makeBmp(canvas));
+  if (to === 'tiff') return out(name, 'tiff', await makeTiff(canvas));
+  if (to === 'jpg') return out(name, 'jpg', await canvasBlob(canvas, 'image/jpeg', 0.95));
+  if (to === 'webp') {
+    const blob = await canvasBlob(canvas, 'image/webp', 0.95);
+    if (blob.type === 'image/webp') return out(name, 'webp', blob);
+  }
+  return out(name, 'png', await canvasBlob(canvas, 'image/png'));
+}
+
 async function convertImage(file, target, ctx) {
   if (target === 'mp4') return convertMedia(file, 'mp4', ctx); // 움직이는 GIF → 동영상
+  if (target === 'compress') return [await compressImage(file)];
+  if (ROTATE[target]) return [await rotateImage(file, ROTATE[target])];
   if (target === 'pdf') {
     const vector = extOf(file.name) === 'svg' ? await svgToPdf(file).catch((e) => { console.warn('SVG를 그림으로 넣습니다', e); return null; }) : null;
     return [vector || await imagesToPdf([file], stemOf(file.name))];
@@ -575,11 +815,15 @@ const PDF_TASK_ERRORS = {
   compress: 'PDF 용량을 줄이지 못했습니다. 손상되었거나 특수한 PDF일 수 있습니다.',
   tables: 'PDF에서 표를 꺼내지 못했습니다. 손상되었거나 특수한 PDF일 수 있습니다.',
   decrypt: 'PDF의 암호를 풀지 못했습니다. 손상되었거나 특수한 PDF일 수 있습니다.',
+  protect: 'PDF에 암호를 걸지 못했습니다. 손상되었거나 특수한 PDF일 수 있습니다.',
   office: '문서의 암호를 풀지 못했습니다. 손상되었거나 지원하지 않는 암호 방식일 수 있습니다.',
 };
 
-/** 작업자(브라우저용 파이썬)에게 일을 맡긴다. task: 'docx' | 'compress' | 'tables' | 'decrypt' | 'office' */
-function pdfTask(file, task, ctx, working = '변환 중…') {
+/**
+ * 작업자(브라우저용 파이썬)에게 일을 맡긴다. task: 'docx' | 'compress' | 'tables' | 'decrypt' | 'protect' | 'office'
+ * extra: 일에 더 필요한 값 (암호 걸기의 새 암호 newPassword)
+ */
+function pdfTask(file, task, ctx, working = '변환 중…', extra = {}) {
   const password = ctx.passwordFor?.(file.name) ?? null;
   ctx.status(task === 'docx' ? '준비 중… (처음 한 번 1~2분)' : '준비 중…');
   if (!pdfWorker) pdfWorker = new Worker(new URL('./pdf2word/worker.js', import.meta.url), { type: 'module' });
@@ -616,12 +860,10 @@ function pdfTask(file, task, ctx, working = '변환 중…') {
     worker.addEventListener('message', onMessage);
     worker.addEventListener('error', onError);
     file.arrayBuffer().then((buffer) => {
-      worker.postMessage({ id, task, password, base: new URL('.', document.baseURI).href, buffer }, [buffer]);
+      worker.postMessage({ id, task, password, ...extra, base: new URL('.', document.baseURI).href, buffer }, [buffer]);
     }, (e) => { done(); reject(e); });
   });
 }
-
-const prettyMB = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}MB` : `${Math.max(1, Math.round(n / 1e3))}KB`);
 
 /** pdf-lib으로 PDF를 연다. 암호가 걸린 PDF는 먼저 암호를 풀어서 연다 (pdf-lib은 암호를 풀지 못한다). */
 async function loadPdfLib(file, ctx) {
@@ -666,13 +908,32 @@ async function convertPdf(file, target, ctx) {
   }
   if (target === 'compress') {
     const { buffer } = await pdfTask(file, 'compress', ctx, '줄이는 중…');
-    if (buffer.byteLength >= file.size * 0.97) {
-      const result = out(`${stem}_압축`, 'pdf', file);
-      result.note = '이미 작게 만들어진 PDF라 더 줄이지 못했습니다. 원본과 같은 파일입니다.';
-      return [result];
-    }
-    const result = out(`${stem}_압축`, 'pdf', new Blob([buffer], { type: MIME.pdf }));
-    result.note = `${prettyMB(file.size)} → ${prettyMB(buffer.byteLength)} (${Math.round((1 - buffer.byteLength / file.size) * 100)}% 줄임)`;
+    return [shrunk(file, 'pdf', buffer)];
+  }
+  if (ROTATE[target]) {
+    ctx.status('돌리는 중…');
+    const { doc } = await loadPdfLib(file, ctx);
+    const { degrees } = await import('pdf-lib');
+    for (const page of doc.getPages()) page.setRotation(degrees((page.getRotation().angle + ROTATE[target]) % 360));
+    return [out(`${stem}_회전`, 'pdf', new Blob([await doc.save()], { type: MIME.pdf }))];
+  }
+  if (target === 'unlock') {
+    // 여는 암호가 없어도 인쇄·복사를 막아 둔 PDF(권한 암호)가 있다. 그런 제한도 함께 푼다.
+    const { PDFDocument } = await import('pdf-lib');
+    let encrypted = true;
+    try {
+      encrypted = (await PDFDocument.load(await file.arrayBuffer(), { ignoreEncryption: true, updateMetadata: false })).isEncrypted;
+    } catch { /* pdf-lib이 못 여는 PDF는 아래 작업자가 판단한다 */ }
+    if (!encrypted) throw new ConvertError('이 PDF에는 암호가 걸려 있지 않습니다.');
+    const { buffer } = await pdfTask(file, 'decrypt', ctx, '암호를 푸는 중…');
+    const result = out(`${stem}_암호해제`, 'pdf', new Blob([buffer], { type: MIME.pdf }));
+    result.note = '이제 암호 없이 열리고, 인쇄·복사 제한도 없습니다.';
+    return [result];
+  }
+  if (target === 'protect') {
+    const { buffer } = await pdfTask(file, 'protect', ctx, '암호를 거는 중…', { newPassword: ctx.newPassword });
+    const result = out(`${stem}_암호`, 'pdf', new Blob([buffer], { type: MIME.pdf }));
+    result.note = '열 때 정한 암호를 물어요. 암호를 잊으면 열 수 없으니 꼭 기억해 두세요.';
     return [result];
   }
   if (target === 'xlsx') {

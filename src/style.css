@@ -84,8 +84,9 @@ h1 { font-size: 26px; margin: 0; }
   border: 1px solid var(--line); background: var(--card); color: var(--text); padding: 7px 14px; font-size: 14px; font-weight: 600;
   cursor: pointer; font-family: inherit;
 }
+.strength button + button { border-left: 0; }
 .strength button:first-of-type { border-radius: 10px 0 0 10px; }
-.strength button:last-of-type { border-radius: 0 10px 10px 0; border-left: 0; }
+.strength button:last-of-type { border-radius: 0 10px 10px 0; }
 .strength button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
 .strength button:disabled { opacity: .6; cursor: not-allowed; }
 .hint { color: var(--muted); font-size: 14px; margin: 0; }
@@ -126,3 +127,4 @@ td:first-child { white-space: nowrap; font-weight: 600; color: var(--text); padd
 .password input { flex: 1; min-width: 160px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; font: inherit; background: var(--card); color: var(--text); }
 .password button { padding: 10px 16px; border: 0; border-radius: 10px; background: var(--accent); color: #fff; font: inherit; font-weight: 600; cursor: pointer; }
 .password button.skip { background: none; color: var(--muted); border: 1px solid var(--line); }
+.password p.warn { margin: 8px 0 0; color: var(--danger); font-size: 14px; }

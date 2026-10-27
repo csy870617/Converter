@@ -2,7 +2,8 @@
 //  - docx: PDF → Word (pdf2docx)
 //  - compress: PDF 용량 줄이기 (PyMuPDF)
 //  - tables: PDF 속 표 꺼내기 (PyMuPDF)
-//  - decrypt: PDF 암호 풀기 (합치기·나누기 전에)
+//  - decrypt: PDF 암호 풀기 (합치기·나누기 전에, 또는 '암호 풀기' 도구)
+//  - protect: PDF에 암호 걸기
 //  - office: 암호 걸린 Office 문서 풀기 (msoffcrypto-tool)
 // 처음 한 번 필요한 엔진을 받고, 그 뒤로는 브라우저 저장소에서 바로 쓴다.
 // 일마다 필요한 것만 받는다: PDF 도구는 PyMuPDF(약 20MB), Word 변환은 나머지(약 20MB)를 더, Office 암호 풀기는 약 2MB.
@@ -22,6 +23,7 @@ const NEEDS = {
   compress: PDF_TOOLS,
   tables: PDF_TOOLS,
   decrypt: PDF_TOOLS,
+  protect: PDF_TOOLS,
   office: /^(cryptography|cffi|pycparser|six|libopenssl|olefile|msoffcrypto_tool)-/,
 };
 // 파이썬 패키지가 아니라 함께 쓰는 라이브러리(.zip)는 이름으로 불러야 제자리에 놓인다
@@ -84,7 +86,7 @@ async function ready(base, task) {
 }
 
 self.onmessage = async (event) => {
-  const { id, base, buffer, task = 'docx', password = null } = event.data;
+  const { id, base, buffer, task = 'docx', password = null, newPassword = null } = event.data;
   current = id;
   let stage = 'load';
   try {
@@ -106,6 +108,8 @@ self.onmessage = async (event) => {
       let failed = [];
       if (task === 'compress' || task === 'decrypt') {
         py.pyimport('pdf_tools')[task]('/in', '/out', report, password);
+      } else if (task === 'protect') {
+        py.pyimport('pdf_tools').protect('/in', '/out', report, password, newPassword);
       } else if (task === 'docx') {
         const result = py.pyimport('pdf2word_convert').convert('/in', '/out', report, password);
         failed = Array.from(result.toJs());

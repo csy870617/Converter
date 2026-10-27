@@ -1,4 +1,4 @@
-# PDF 도구 (브라우저용 파이썬에서 PyMuPDF로): 용량 줄이기, 표 꺼내기(PDF → 엑셀)
+# PDF 도구 (브라우저용 파이썬에서 PyMuPDF로): 용량 줄이기, 암호 풀기·걸기, 표 꺼내기(PDF → 엑셀)
 import json
 import re
 
@@ -33,6 +33,17 @@ def decrypt(src, dst, report=lambda p: None, password=None):
     """암호를 풀어 다시 저장한다 (합치기·나누기는 암호 걸린 PDF를 그대로 다루지 못한다)."""
     doc = _open(src, password)
     doc.save(dst, garbage=1, deflate=True, encryption=pymupdf.PDF_ENCRYPT_NONE)
+    report(1.0)
+
+
+def protect(src, dst, report=lambda p: None, password=None, new_password=''):
+    """여는 암호를 걸어 저장한다 (AES-256). 인쇄·복사 같은 다른 제한은 두지 않는다."""
+    if not new_password:
+        raise RuntimeError('암호가 비어 있습니다')
+    doc = _open(src, password)
+    report(0.3)
+    doc.save(dst, garbage=1, deflate=True, encryption=pymupdf.PDF_ENCRYPT_AES_256,
+             user_pw=new_password, owner_pw=new_password)
     report(1.0)
 
 

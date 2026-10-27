@@ -7,7 +7,9 @@ MP4 → MP3, Word → PDF, PDF → Word, 한글(HWP) → PDF, 아이폰 사진(H
 - 파일은 서버로 올라가지 않습니다. 모든 변환은 **사용자의 브라우저 안에서** 이루어집니다.
 - 여러 파일을 한 번에 변환할 수 있고, 결과가 여러 개면 ZIP 하나로 받습니다.
 - 사진 여러 장을 PDF 한 개로, PDF 여러 개를 하나로 합칠 수 있습니다.
-- **PDF 도구**: 용량 줄이기, 쪽 나누기, 합치기, PDF 속 표를 엑셀로 꺼내기.
+- **용량 줄이기**: 사진·동영상·오디오·PDF를 메일·메신저로 보내기 좋게 작게 만듭니다. 줄어든 용량을 알려 주고, 이미 작은 파일은 원본을 그대로 줍니다.
+- **돌리기**: 옆으로 누운 사진·스캔한 PDF를 오른쪽·왼쪽으로 돌립니다.
+- **PDF 도구**: 용량 줄이기, 돌리기, 쪽 나누기, 합치기, **암호 풀기·암호 걸기**, PDF 속 표를 엑셀로 꺼내기.
 - **암호가 걸린 파일**(카드 명세서 PDF, 암호 걸린 엑셀·Word·한글 문서)은 암호를 물어서 변환합니다. 암호는 그 변환에만 쓰고 어디에도 저장하거나 보내지 않습니다.
 - **AI 화질 개선**: 흐릿하거나 작은 사진·동영상을 2배/4배로 키우면서 선명하게 만듭니다.
 
@@ -15,14 +17,30 @@ MP4 → MP3, Word → PDF, PDF → Word, 한글(HWP) → PDF, 아이폰 사진(H
 
 | 종류 | 이런 파일을 | 이렇게 바꿀 수 있어요 |
 |---|---|---|
-| 동영상 | MP4, MOV, AVI, MKV, WEBM, WMV, FLV, M2TS·MTS(캠코더), VOB, RM·RMVB … | MP4, MOV, AVI, WEBM, GIF, **MP3**, WAV, M4A, **고화질 2배·4배** |
-| 오디오 | MP3, WAV, M4A, AAC, FLAC, OGG, WMA, OPUS, AIFF, APE … | MP3, WAV, M4A, AAC, FLAC, OGG, OPUS, **M4R(아이폰 벨소리)** |
-| 이미지 | JPG, PNG, WEBP, **HEIC**, AVIF, BMP, GIF, TIFF, SVG, ICO | JPG, PNG, WEBP, **PDF**, GIF, BMP, TIFF, ICO, **고화질 2배·4배** (움직이는 GIF → MP4) |
+| 동영상 | MP4, MOV, AVI, MKV, WEBM, WMV, FLV, M2TS·MTS(캠코더), VOB, RM·RMVB … | MP4, MOV, AVI, WEBM, GIF, **MP3**, WAV, M4A, **고화질 2배·4배**, **용량 줄이기** |
+| 오디오 | MP3, WAV, M4A, AAC, FLAC, OGG, WMA, OPUS, AIFF, APE … | MP3, WAV, M4A, AAC, FLAC, OGG, OPUS, **M4R(아이폰 벨소리)**, **용량 줄이기** |
+| 이미지 | JPG, PNG, WEBP, **HEIC**, AVIF, BMP, GIF, TIFF, SVG, ICO | JPG, PNG, WEBP, **PDF**, GIF, BMP, TIFF, ICO, **고화질 2배·4배**, **용량 줄이기**, 오른쪽·왼쪽으로 돌리기 (움직이는 GIF → MP4) |
 | Word 문서 | DOC, DOCX, ODT, RTF, TXT … | **PDF**, DOCX, DOC, ODT, RTF, TXT, JPG·PNG(쪽마다) |
 | **한글 문서** | **HWP, HWPX** | **PDF**, DOCX(Word), JPG·PNG(쪽마다), TXT |
 | 프레젠테이션 | PPT, PPTX, PPS, ODP … | **PDF**, PPTX, PPT, ODP, JPG·PNG(장마다) |
 | 스프레드시트 | XLS, XLSX, XLSB, ODS, CSV | **PDF**, XLSX, XLS, ODS, CSV |
-| PDF | PDF | **DOCX(Word)**, **XLSX(표)**, JPG, PNG, TXT, 용량 줄이기, 쪽 나누기, 여러 개 합치기 |
+| PDF | PDF | **DOCX(Word)**, **XLSX(표)**, JPG, PNG, TXT, 용량 줄이기, 오른쪽·왼쪽으로 돌리기, 쪽 나누기, 여러 개 합치기, 암호 풀기, 암호 걸기 |
+
+## 용량 줄이기
+
+| 종류 | 이렇게 줄입니다 |
+|---|---|
+| 사진 | 긴 변을 2,560px까지 줄이고(1,200만 화소 → 약 500만 화소) JPG 품질 80으로. WEBP는 WEBP로. 화면 캡처·로고처럼 색이 적은 그림과 투명한 그림은 256색 PNG로 만들어 글자가 번지지 않고 투명한 곳도 남습니다. 촬영 위치(GPS) 같은 부가 정보도 함께 빠집니다. |
+| 동영상 | 1280×720(세로 영상은 720×1280)보다 크면 그만큼으로 줄이고 H.264(720p 약 1.5Mbps)로 다시 압축해 MP4로. 휴대폰 1080p·4K 영상은 보통 5~20분의 1이 됩니다. 크롬·엣지에서는 그래픽카드가 처리해 빠르고, 그 밖에는 ffmpeg로 합니다(느림). |
+| 오디오 | MP3·M4A·AAC는 128kbps, OGG·OPUS는 같은 형식으로 낮은 음질 설정. WAV·FLAC·WMA 같은 무손실·옛 형식은 어디서나 재생되는 MP3(128kbps)로. |
+| PDF | 사진을 150dpi·JPEG 품질 75로 다시 저장하고, 글꼴은 쓰는 글자만 남깁니다. |
+
+3% 넘게 줄지 않으면(이미 작게 만들어진 파일) 원본을 그대로 주고 그렇다고 알려 줍니다.
+
+## PDF 암호
+
+- **암호 풀기**: 암호를 한 번 입력하면 다음부터 암호 없이 열리는 PDF로 저장합니다(카드 명세서 등). 여는 암호 없이 인쇄·복사만 막아 둔 PDF도 그 제한을 풉니다.
+- **암호 걸기**: 정한 암호(AES-256)를 걸어, 열 때마다 암호를 묻게 합니다. 잘못 치지 않도록 두 번 입력합니다. 여러 PDF에 한 번에 같은 암호를 걸 수 있습니다.
 
 ## 문서 변환이 정확하도록 한 것
 
@@ -51,7 +69,10 @@ MP4 → MP3, Word → PDF, PDF → Word, 한글(HWP) → PDF, 아이폰 사진(H
 - 사진으로 찍은(스캔한) PDF는 글자가 그림이라 Word·엑셀로 바꿔도 그림으로 들어갑니다.
 - AI 화질 개선은 [Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN) 모델을 브라우저 안에서 돌립니다.
   - **원본을 훼손하지 않도록** AI 결과를 원래 크기로 다시 줄였을 때 원본과 같아지도록 바로잡습니다(역투영). 그래서 없는 무늬를 지어내거나 얼굴·글자·색이 바뀌는 왜곡이 크게 줄었습니다. 측정 결과는 [scripts/model/README.md](scripts/model/README.md)에 있습니다.
-  - 세기는 **자연스럽게**(원본 충실, 기본)와 **강하게**(윤곽을 한 번 더 또렷하게) 중에 고를 수 있습니다. 1080p처럼 이미 괜찮은 영상은 강하게가 차이가 잘 보입니다.
+  - 세기는 세 가지입니다.
+    - **원본**: 원본의 결(잡음·필름 입자·압축 흔적)까지 그대로 살려 키웁니다. 결과를 원래 크기로 줄이면 원본과 똑같아지도록 맞춰, AI가 지우거나 바꾸는 것이 가장 적습니다. JPG·동영상처럼 압축된 파일에서 자연스럽게와 차이가 납니다(PNG 같은 무손실 원본은 자연스럽게도 원본과 똑같이 맞춥니다).
+    - **자연스럽게**(기본): 흐릿한 부분은 선명하게, 압축 때문에 생긴 얼룩은 깨끗하게 합니다.
+    - **강하게**: 자연스럽게에 윤곽을 한 번 더 또렷하게. 1080p처럼 이미 괜찮은 영상은 강하게가 차이가 잘 보입니다.
   - 그래픽카드 가속(WebGPU)이 되는 크롬·엣지에서 빠르고, 안 되면 CPU로 계산합니다(느림). 모델은 약 5MB입니다.
   - 작은 사진(스마트폰 캡처, 옛날 사진, 웹 이미지)일수록 효과가 큽니다. 결과는 최대 6,400만 화소까지 커집니다(아이폰 사파리는 약 1,600만 화소).
   - 동영상은 장면을 한 장씩 처리하므로 오래 걸립니다. 크롬·엣지에서는 동영상을 푸는 것과 묶는 것 모두 그래픽카드가 하고(ffmpeg 없이), 멈춘 장면은 건너뜁니다. 결과는 최대 4K입니다.
@@ -83,7 +104,7 @@ npm test           # 실제 브라우저로 모든 변환을 시험 (build 후 �
 - `src/formats.js`: 지원 형식 목록
 - `src/engines.js`: 변환 엔진 ([ffmpeg.wasm](https://github.com/ffmpegwasm/ffmpeg.wasm), [LibreOffice WASM](https://github.com/matbeedotcom/libreoffice-document-converter), [PDF.js](https://mozilla.github.io/pdf.js/), [pdf-lib](https://pdf-lib.js.org/), [heic-to](https://github.com/hoppergee/heic-to), [UTIF.js](https://github.com/photopea/UTIF.js), [gifenc](https://github.com/mattdesl/gifenc))
 - `src/hwp.js`: 한글 문서 → PDF ([rhwp](https://github.com/edwardkim/rhwp), [jsPDF](https://github.com/parallax/jsPDF), [svg2pdf.js](https://github.com/yWorks/svg2pdf.js))
-- `src/pdf2word/`: 브라우저용 파이썬 작업자 — PDF → Word(`convert.py`, pdf2docx 고침), PDF 도구(`tools.py`, PyMuPDF), Office 암호 풀기(`officecrypto.py`, msoffcrypto-tool)
+- `src/pdf2word/`: 브라우저용 파이썬 작업자 — PDF → Word(`convert.py`, pdf2docx 고침), PDF 도구(`tools.py`, PyMuPDF: 용량 줄이기·암호 풀기·걸기·표 꺼내기), Office 암호 풀기(`officecrypto.py`, msoffcrypto-tool)
 - `src/xlsx.js`: PDF에서 꺼낸 표로 엑셀 파일 만들기
 - `src/localfonts.js`: 내 컴퓨터 글꼴 쓰기 (Local Font Access)
 - `src/upscale.js`: AI 화질 개선 ([ONNX Runtime Web](https://onnxruntime.ai/), 동영상 풀기·묶기 [Mediabunny](https://mediabunny.dev/))
@@ -106,9 +127,9 @@ npm test           # 실제 브라우저로 모든 변환을 시험 (build 후 �
 | [PDF.js](https://mozilla.github.io/pdf.js/) | PDF 그리기·글 꺼내기 | Apache-2.0 |
 | [pdf-lib](https://pdf-lib.js.org/), [jsPDF](https://github.com/parallax/jsPDF), [svg2pdf.js](https://github.com/yWorks/svg2pdf.js) | PDF 만들기 | MIT |
 | [heic-to](https://github.com/hoppergee/heic-to) (libheif) | 아이폰 사진 | LGPL-3.0 |
-| [Mediabunny](https://mediabunny.dev/) | 동영상 화질 개선 | MPL-2.0 |
+| [Mediabunny](https://mediabunny.dev/) | 동영상 화질 개선·용량 줄이기 | MPL-2.0 |
 | [ONNX Runtime Web](https://onnxruntime.ai/), [Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN) | AI 화질 개선 | MIT, BSD-3-Clause |
-| UTIF.js, gifenc, fflate | TIFF·GIF·ZIP | MIT |
+| UTIF.js, gifenc, fflate | TIFF·GIF·ZIP, 256색 PNG | MIT |
 | 나눔고딕·나눔명조, Liberation, Noto Serif/Sans KR(한자만), DejaVu Sans(기호만) | 글꼴 | SIL OFL 1.1, Bitstream Vera ([자세히](public/fonts/README.txt)) |
 
 PyMuPDF(MuPDF)는 AGPL-3.0, FFmpeg(x264 포함)는 GPL로 배포됩니다. 이 사이트를 고쳐서 다른 곳에 공개할 때는
