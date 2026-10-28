@@ -4,18 +4,18 @@ export const CATEGORIES = [
     id: 'video', name: '동영상', engine: 'media',
     exts: ['mp4', 'mov', 'avi', 'mkv', 'webm', 'wmv', 'flv', 'm4v', '3gp', '3g2', 'mpg', 'mpeg', 'ts', 'm2ts', 'mts',
       'vob', 'ogv', 'asf', 'f4v', 'rm', 'rmvb', 'divx'],
-    targets: ['mp4', 'mov', 'avi', 'webm', 'gif', 'mp3', 'wav', 'm4a', 'up2', 'up4'],
+    targets: ['mp4', 'mov', 'avi', 'webm', 'gif', 'mp3', 'wav', 'm4a', 'up2', 'up4', 'compress'],
   },
   {
     id: 'audio', name: '오디오', engine: 'media',
     exts: ['mp3', 'wav', 'm4a', 'aac', 'flac', 'ogg', 'oga', 'wma', 'opus', 'amr', 'aiff', 'aif', 'm4r', 'm4b', 'caf',
       'ac3', 'mp2', 'mka', 'ape', 'wv'],
-    targets: ['mp3', 'wav', 'm4a', 'aac', 'flac', 'ogg', 'opus', 'm4r'],
+    targets: ['mp3', 'wav', 'm4a', 'aac', 'flac', 'ogg', 'opus', 'm4r', 'compress'],
   },
   {
     id: 'image', name: '이미지', engine: 'image',
     exts: ['jpg', 'jpeg', 'jfif', 'jpe', 'png', 'webp', 'heic', 'heif', 'avif', 'bmp', 'gif', 'tif', 'tiff', 'svg', 'ico'],
-    targets: ['jpg', 'png', 'webp', 'pdf', 'gif', 'bmp', 'tiff', 'ico', 'up2', 'up4'],
+    targets: ['jpg', 'png', 'webp', 'pdf', 'gif', 'bmp', 'tiff', 'ico', 'up2', 'up4', 'compress', 'rotr', 'rotl'],
   },
   {
     id: 'word', name: 'Word 문서', engine: 'office',
@@ -40,22 +40,29 @@ export const CATEGORIES = [
   {
     id: 'pdf', name: 'PDF', engine: 'pdf',
     exts: ['pdf'],
-    targets: ['docx', 'xlsx', 'jpg', 'png', 'txt', 'compress', 'split'],
+    targets: ['docx', 'xlsx', 'jpg', 'png', 'txt', 'compress', 'rotr', 'rotl', 'split', 'unlock', 'protect'],
   },
 ];
 
 /** AI 화질 개선(업스케일) 선택지: 배율 */
 export const UPSCALE = { up2: 2, up4: 4 };
 
-/** PDF 도구: 형식은 그대로 두고 손보는 것 (결과는 PDF) */
-export const TOOLS = { compress: '용량 줄이기', split: '쪽 나누기', merge: '하나로 합치기' };
+/** 도구: 형식은 그대로 두고 손보는 것 */
+export const TOOLS = {
+  compress: '용량 줄이기', rotr: '오른쪽으로 돌리기', rotl: '왼쪽으로 돌리기', split: '쪽 나누기', merge: '하나로 합치기',
+  unlock: '암호 풀기', protect: '암호 걸기',
+};
+/** 돌리기: 시계 방향 각도 */
+export const ROTATE = { rotr: 90, rotl: 270 };
 
 /** 화면에 보여줄 이름 */
 export const targetLabel = (t) => (UPSCALE[t] ? `고화질 ${UPSCALE[t]}배` : TOOLS[t] || t.toUpperCase());
 
 const SAME = { jpeg: 'jpg', jfif: 'jpg', jpe: 'jpg', tif: 'tiff', heif: 'heic', oga: 'ogg' };
-// 이 형식에는 맞지 않는 선택지 (SVG는 원래 선명한 그림이라 AI 화질 개선이 필요 없다)
-const NOT_FOR = { svg: ['up2', 'up4'] };
+// 이 형식에는 맞지 않는 선택지 (SVG는 원래 선명한 그림이라 AI 화질 개선이 필요 없다.
+// 움직이는 GIF·아이콘(ICO)은 사진처럼 다시 저장하면 움직임·여러 크기가 사라진다)
+const PHOTO_TOOLS = ['compress', 'rotr', 'rotl'];
+const NOT_FOR = { svg: ['up2', 'up4', ...PHOTO_TOOLS], gif: PHOTO_TOOLS, ico: PHOTO_TOOLS };
 // 이 형식에만 더 있는 선택지 (움직이는 GIF → 동영상)
 const EXTRA_FOR = { gif: ['mp4'] };
 
@@ -77,7 +84,7 @@ export function targetsFor(name) {
 
 export const MIME = {
   mp3: 'audio/mpeg', wav: 'audio/wav', m4a: 'audio/mp4', aac: 'audio/aac', flac: 'audio/flac', ogg: 'audio/ogg',
-  opus: 'audio/ogg', m4r: 'audio/mp4', mp4: 'video/mp4', mov: 'video/quicktime', avi: 'video/x-msvideo', webm: 'video/webm', gif: 'image/gif', jpg: 'image/jpeg', png: 'image/png', webp: 'image/webp',
+  opus: 'audio/ogg', m4r: 'audio/mp4', m4b: 'audio/mp4', mp4: 'video/mp4', mov: 'video/quicktime', avi: 'video/x-msvideo', webm: 'video/webm', gif: 'image/gif', jpg: 'image/jpeg', png: 'image/png', webp: 'image/webp',
   ico: 'image/x-icon', bmp: 'image/bmp', tiff: 'image/tiff', pdf: 'application/pdf', txt: 'text/plain;charset=utf-8', csv: 'text/csv;charset=utf-8',
   docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',

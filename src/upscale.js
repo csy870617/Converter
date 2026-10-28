@@ -6,7 +6,7 @@
 // 그래서 AI가 없는 무늬를 지어내거나 얼굴·글자·색을 바꾸는 왜곡이 크게 줄어든다.
 // 모델을 고른 근거와 측정 결과는 scripts/model/README.md 참고.
 import { ConvertError, extOf, stemOf } from './formats.js';
-import { MAX_PIXELS, asset, bigAsset, canvasBlob, decodeImage, loadFFmpegThreaded, makeCanvas, out } from './engines.js';
+import { MAX_PIXELS, asset, bigAsset, canvasBlob, decodeImage, loadFFmpegThreaded, makeCanvas, out, pickCodec } from './engines.js';
 
 const MODEL = { file: 'models/fidelity-x4.onnx', half: 'models/fidelity-x4-fp16.onnx', size: '5MB' };
 // 원본과 얼마나 엄격하게 맞출지. 무손실 원본(PNG 등)은 그대로 맞추고, 손실 압축 원본(JPEG·동영상)은
@@ -14,11 +14,17 @@ const MODEL = { file: 'models/fidelity-x4.onnx', half: 'models/fidelity-x4-fp16.
 const STRICT = { core: 0, soft: 0 };
 const LOSSY = { core: 0.015, soft: 1 };
 const LOSSLESS = ['png', 'bmp', 'tif', 'tiff', 'gif'];
-// '강하게' 모드: 결과에 윤곽 강조를 더한다. AI 결과는 실제 원본보다 조금 무른 편이라(윤곽 세기 약 0.7배),
-// 강조 1.0이면 원본과 비슷하거나 조금 더 또렷해진다. 측정 결과는 scripts/model/README.md 참고.
+// 세기 (strength)
+// - 'original'(원본): 어떤 원본이든 그대로 맞춘다. 원본의 결(잡음·필름 입자·압축 흔적)까지 그대로 키우고 AI가 지우는 것이 없다.
+// - 'natural'(자연스럽게, 기본): 원본 형식에 따라 맞춘다 (위의 STRICT·LOSSY). 압축 흔적·잡음은 깨끗하게 정리된다.
+// - 'strong'(강하게): 자연스럽게 + 윤곽 강조. AI 결과는 실제 원본보다 조금 무른 편이라(윤곽 세기 약 0.7배),
+//   강조 1.0이면 원본과 비슷하거나 조금 더 또렷해진다. 측정 결과는 scripts/model/README.md 참고.
 const STRONG = 1.0;
-const fidelityFor = (lossless, strong) => ({ ...(lossless ? STRICT : LOSSY), sharp: strong ? STRONG : 0 });
-const suffix = (scale, strong) => `_고화질${scale}배${strong ? '_강하게' : ''}`;
+const fidelityFor = (lossless, strength) => ({
+  ...(lossless || strength === 'original' ? STRICT : LOSSY), sharp: strength === 'strong' ? STRONG : 0,
+});
+const SUFFIX = { original: '_원본충실', strong: '_강하게' };
+const suffix = (scale, strength) => `_고화질${scale}배${SUFFIX[strength] || ''}`;
 const PAD = 16; // 타일 경계가 티 나지 않도록 주변을 겹쳐서 계산한다
 const WHOLE = 400_000; // 그래픽카드에서는 이 화소 수까지 한 번에 계산한다 (조각내면 느려진다)
 // 그래픽카드 안에서 그림으로 바꾸는 방식은 4배 결과 전체를 한 번에 담으므로 이 크기까지만 쓴다
@@ -299,7 +305,7 @@ const nextFrame = () => new Promise((r) => setTimeout(r, 0)); // 화면이 멈�
 // 사진
 // ---------------------------------------------------------------------------
 
-export async function upscaleImage(file, scale, { status, progress, strong }) {
+export async function upscaleImage(file, scale, { status, progress, strength }) {
   const bitmap = await decodeImage(file);
   const engine = await loadEngine(status);
   // 아주 큰 사진은 이 브라우저가 다룰 수 있는 크기로 줄여서 읽는다 (아이폰 사파리는 약 1,670만 화소까지)
@@ -316,7 +322,7 @@ export async function upscaleImage(file, scale, { status, progress, strong }) {
   const h = Math.max(H, result.height);
   if (result.width !== w || result.height !== h) { result.width = w; result.height = h; }
   const ext = extOf(file.name);
-  const fidelity = fidelityFor(LOSSLESS.includes(ext), strong);
+  const fidelity = fidelityFor(LOSSLESS.includes(ext), strength);
 
   const how = engine.gpu ? '' : ' · 느린 모드(CPU)';
   status(`화질 높이는 중… ${W}×${H} → ${w}×${h}${how}`);
@@ -341,7 +347,7 @@ export async function upscaleImage(file, scale, { status, progress, strong }) {
     rctx.putImageData(full, 0, 0);
   }
 
-  const name = `${stemOf(file.name)}${suffix(scale, strong)}`;
+  const name = `${stemOf(file.name)}${suffix(scale, strength)}`;
   if (ext === 'jpg' || ext === 'jpeg') return [out(name, 'jpg', await canvasBlob(canvas, 'image/jpeg', 0.95))];
   if (ext === 'webp') {
     const blob = await canvasBlob(canvas, 'image/webp', 0.95);
@@ -392,19 +398,11 @@ function frameUpscaler(engine, ow, oh, fidelity, onFrame) {
   };
 }
 
-/** 원하는 코덱(기본 H.264, 테스트용 VP9)과 그 코덱을 브라우저가 인코딩할 수 있는지 */
-async function pickCodec(mb, w, h) {
-  let codec = 'avc';
-  try { if (localStorage.getItem('upscale-codec') === 'vp9') codec = 'vp9'; } catch { /* 무시 */ }
-  const ok = await mb.canEncodeVideo(codec, { width: w, height: h, quality: mb.QUALITY_VERY_HIGH }).catch(() => false);
-  return ok ? codec : null;
-}
-
 /**
  * 빠른 길: 브라우저(그래픽카드)가 직접 동영상을 풀고(디코딩) 다시 묶는다(인코딩). ffmpeg가 필요 없다.
  * 풀 수 없거나 묶을 수 없는 형식이면 null을 돌려준다.
  */
-async function upscaleVideoWebCodecs(file, scale, { status, progress, strong }) {
+async function upscaleVideoWebCodecs(file, scale, { status, progress, strength }) {
   if (!('VideoEncoder' in self) || !('VideoDecoder' in self)) return null;
   const mb = await import('mediabunny');
   const input = new mb.Input({ source: new mb.BlobSource(file), formats: mb.ALL_FORMATS });
@@ -416,7 +414,7 @@ async function upscaleVideoWebCodecs(file, scale, { status, progress, strong }) 
     const W = track.displayWidth;
     const H = track.displayHeight;
     const [ow, oh] = videoSize(W, H, scale);
-    const codec = await pickCodec(mb, ow, oh);
+    const codec = await pickCodec(mb, ow, oh, mb.QUALITY_VERY_HIGH);
     if (!codec) return null;
 
     const engine = await loadEngine(status);
@@ -427,7 +425,7 @@ async function upscaleVideoWebCodecs(file, scale, { status, progress, strong }) 
     const started = Date.now();
     let done = 0;
     const reader = makeCanvas(W, H).getContext('2d', { willReadFrequently: true });
-    const upscaler = frameUpscaler(engine, ow, oh, fidelityFor(false, strong), async () => {
+    const upscaler = frameUpscaler(engine, ow, oh, fidelityFor(false, strength), async () => {
       done++;
       status(`화질 높이는 중… ${done}/${Math.max(done, total)}장면${how}${timeLeft(started, done, Math.max(done, total))}`);
       progress(Math.min(0.99, done / total));
@@ -463,7 +461,7 @@ async function upscaleVideoWebCodecs(file, scale, { status, progress, strong }) 
     // 소리를 옮길 수 없어 빠지게 되면 ffmpeg 길로 처리한다 (소리 없는 결과를 만들지 않는다)
     if (!conversion.isValid || conversion.discardedTracks.some((d) => d.track.type === 'audio')) return null;
     await conversion.execute();
-    return [out(`${stemOf(file.name)}${suffix(scale, strong)}`, 'mp4', output.target.buffer)];
+    return [out(`${stemOf(file.name)}${suffix(scale, strength)}`, 'mp4', output.target.buffer)];
   } finally {
     if (conversion && conversion.state === 'executing') await conversion.cancel?.().catch(() => {});
     input.dispose?.();
@@ -490,7 +488,7 @@ function probe(log) {
 async function makeEncoder(w, h, fps) {
   if (!('VideoEncoder' in self)) return null;
   const mb = await import('mediabunny');
-  const codec = await pickCodec(mb, w, h);
+  const codec = await pickCodec(mb, w, h, mb.QUALITY_VERY_HIGH);
   if (!codec) return null;
   const canvas = makeCanvas(w, h);
   const ctx = canvas.getContext('2d');
@@ -514,7 +512,7 @@ async function makeEncoder(w, h, fps) {
 }
 
 /** 느린 길: ffmpeg로 동영상을 풀고, 브라우저 인코더가 없으면 ffmpeg로 다시 묶는다. */
-async function upscaleVideoFFmpeg(file, scale, { status, progress, strong }) {
+async function upscaleVideoFFmpeg(file, scale, { status, progress, strength }) {
   const ff = await loadFFmpegThreaded(status);
   const id = ++videoJob;
   const dir = `/up${id}`;
@@ -563,7 +561,7 @@ async function upscaleVideoFFmpeg(file, scale, { status, progress, strong }) {
     const segments = [];
     let done = 0;
     const started = Date.now();
-    const upscaler = frameUpscaler(engine, ow, oh, fidelityFor(false, strong), async () => {
+    const upscaler = frameUpscaler(engine, ow, oh, fidelityFor(false, strength), async () => {
       done++;
       progress(Math.min(0.99, done / total));
       status(`화질 높이는 중… ${done}/${Math.max(done, total)}장면${how}${timeLeft(started, done, Math.max(done, total))}`);
@@ -630,7 +628,7 @@ async function upscaleVideoFFmpeg(file, scale, { status, progress, strong }) {
     if (code !== 0) throw fail('동영상을 만들지 못했습니다.');
     const data = await ff.readFile(output);
     await ff.deleteFile(output);
-    return [out(`${stemOf(file.name)}${suffix(scale, strong)}`, 'mp4', data)];
+    return [out(`${stemOf(file.name)}${suffix(scale, strength)}`, 'mp4', data)];
   } finally {
     encoder?.close();
     ff.off('log', onLog);

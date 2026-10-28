@@ -7,13 +7,40 @@ import { localFontsSupported, requestLocalFonts } from './localfonts.js';
 // 화면
 // ---------------------------------------------------------------------------
 const $ = (id) => document.getElementById(id);
-const state = { files: [], target: null, busy: false, status: new Map(), strong: false };
-try { state.strong = localStorage.getItem('upscale-strength') === 'strong'; } catch { /* 저장 불가해도 동작 */ }
+// AI 화질 개선 세기: 'original'(원본) | 'natural'(자연스럽게) | 'strong'(강하게)
+const STRENGTHS = ['original', 'natural', 'strong'];
+const STRENGTH_NOTES = {
+  original: '원본의 결(잡음·필름 입자·압축 흔적)까지 그대로 살려 키웁니다. AI가 지우거나 바꾸는 것이 가장 적어요.',
+  natural: '원본은 그대로 두고 흐릿한 부분만 선명하게, 압축 때문에 생긴 얼룩은 깨끗하게 합니다.',
+  strong: '자연스럽게에 윤곽을 한 번 더 또렷하게 합니다. 1080p처럼 이미 괜찮은 영상에서 차이가 잘 보여요.',
+};
+const state = { files: [], target: null, busy: false, status: new Map(), strength: 'natural' };
+try {
+  const saved = localStorage.getItem('upscale-strength');
+  if (STRENGTHS.includes(saved)) state.strength = saved;
+} catch { /* 저장 불가해도 동작 */ }
 let lastUrl = null;
 let downloads = 0; // 이 페이지에서 자동으로 내려받은 횟수
 let clickedAt = 0; // '변환하기'를 누른 시각
 
 const IMAGE = CATEGORIES.find((c) => c.id === 'image');
+// 세기 선택 막대는 AI 화질 개선 줄 안으로 옮겨 다니므로(화면에서 빠져 있을 때도 있다) 처음에 잡아 둔다
+const strengthRow = $('strengthRow');
+
+// 작은 그림(아이콘). 모두 aria-hidden이라 버튼 이름은 글자만 읽힌다.
+const svg = (body) => `<svg viewBox="0 0 24 24" aria-hidden="true">${body}</svg>`;
+const ICONS = {
+  sparkle: svg('<path d="M12 2.5l1.9 5.6 5.6 1.9-5.6 1.9L12 17.5l-1.9-5.6L4.5 10l5.6-1.9z"/><path d="M18.5 15l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z"/>'),
+  compress: svg('<path d="M4 14h6v6M20 10h-6V4M14 10l6.5-6.5M3.5 20.5 10 14"/>'),
+  rotr: svg('<path d="M20.5 12a8.5 8.5 0 1 1-2.5-6l2.5 2.5"/><path d="M20.5 3.5v5h-5"/>'),
+  rotl: svg('<path d="M3.5 12a8.5 8.5 0 1 0 2.5-6L3.5 8.5"/><path d="M3.5 3.5v5h5"/>'),
+  split: svg('<circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><path d="M8.2 7.4 20 17M8.2 16.6 20 7"/>'),
+  merge: svg('<path d="M12 3.5l8.5 4.5-8.5 4.5L3.5 8z"/><path d="M3.5 12.5l8.5 4.5 8.5-4.5"/><path d="M3.5 16.5l8.5 4.5 8.5-4.5"/>'),
+  unlock: svg('<rect x="4.5" y="11" width="15" height="10" rx="2"/><path d="M8 11V7.5a4 4 0 0 1 7.6-1.7"/>'),
+  protect: svg('<rect x="4.5" y="11" width="15" height="10" rx="2"/><path d="M8 11V7.5a4 4 0 0 1 8 0V11"/>'),
+  x: svg('<path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/>'),
+  up: svg('<path d="M12 19V5M5.5 11.5 12 5l6.5 6.5"/>'),
+};
 
 function prettySize(n) {
   const units = ['B', 'KB', 'MB', 'GB'];
@@ -48,7 +75,7 @@ function render() {
   }
   common ??= [];
   // PDF 여러 개: 하나로 합치기
-  if (usable.length > 1 && usable.every((f) => extOf(f.name) === 'pdf')) common.push('merge');
+  if (usable.length > 1 && allPdf(usable)) common.push('merge');
   if (!common.includes(state.target)) state.target = common.length === 1 ? common[0] : null;
 
   const ul = $('files');
@@ -56,9 +83,14 @@ function render() {
   state.files.forEach((f, i) => {
     const ok = targetsFor(f.name).length > 0;
     const li = document.createElement('li');
+    // 파일 종류 표시 (확장자, 종류마다 색)
+    const badge = document.createElement('span');
+    badge.className = `badge b-${ok ? categoryOf(f.name).id : 'none'}`;
+    badge.textContent = (extOf(f.name) || '?').slice(0, 4).toUpperCase();
+    badge.setAttribute('aria-hidden', 'true');
     const name = document.createElement('span');
     name.className = 'name';
-    name.textContent = (ok ? '' : '⚠ ') + f.name;
+    name.textContent = f.name;
     name.title = f.name;
     const info = document.createElement('span');
     const st = state.status.get(f);
@@ -66,57 +98,63 @@ function render() {
       info.className = `state ${st.kind || ''}`;
       info.textContent = st.text;
     } else {
-      info.className = 'size';
+      info.className = ok ? 'size' : 'size bad';
       info.textContent = ok ? prettySize(f.size) : '지원하지 않는 형식';
     }
-    const del = document.createElement('button');
-    del.textContent = '×';
-    del.title = '목록에서 빼기';
-    del.setAttribute('aria-label', `${f.name} 빼기`);
-    del.disabled = state.busy;
-    del.onclick = () => { state.files.splice(i, 1); state.status.clear(); render(); };
-    li.append(name, info);
+    li.append(badge, name, info);
     // 여러 파일을 하나로 합칠 때는 목록 순서대로 합치므로 순서를 바꿀 수 있게 한다
     if (merging() && i > 0) {
-      const up = document.createElement('button');
-      up.className = 'up';
-      up.textContent = '▲';
-      up.title = '위로 올리기';
-      up.setAttribute('aria-label', `${f.name} 위로`);
-      up.disabled = state.busy;
+      const up = iconButton('up', '위로 올리기', `${f.name} 위로`);
       up.onclick = () => { [state.files[i - 1], state.files[i]] = [state.files[i], state.files[i - 1]]; render(); };
       li.append(up);
     }
+    const del = iconButton('x', '목록에서 빼기', `${f.name} 빼기`);
+    del.classList.add('del');
+    del.onclick = () => { state.files.splice(i, 1); state.status.clear(); render(); };
     li.append(del);
     ul.append(li);
   });
 
-  const box = $('targets');
-  box.replaceChildren();
-  for (const t of common) {
-    // AI 화질 개선·PDF 도구는 형식 바꾸기와 성격이 달라 따로 줄을 나눠 보여준다
-    if (UPSCALE[t] && !box.querySelector('.ai')) {
-      const row = document.createElement('div');
-      row.className = 'ai-row';
-      row.textContent = 'AI 화질 개선';
-      box.append(row);
+  // 파일 수·전체 크기, 모두 빼기
+  const summary = $('filesInfo');
+  summary.replaceChildren();
+  if (state.files.length) {
+    const total = state.files.reduce((sum, f) => sum + f.size, 0);
+    summary.append(`${state.files.length}개 · ${prettySize(total)}`);
+    if (state.files.length > 1) {
+      const clear = document.createElement('button');
+      clear.type = 'button';
+      clear.className = 'link-btn';
+      clear.textContent = '모두 빼기';
+      clear.disabled = state.busy;
+      clear.onclick = () => { state.files = []; state.status.clear(); setMsg(''); render(); };
+      summary.append(clear);
     }
-    if (TOOLS[t] && !box.querySelector('.tool')) {
-      const row = document.createElement('div');
-      row.className = 'ai-row';
-      row.textContent = 'PDF 도구';
-      box.append(row);
-    }
-    const b = document.createElement('button');
-    b.className = `fmt${t === state.target ? ' on' : ''}`;
-    b.setAttribute('aria-pressed', String(t === state.target));
-    b.textContent = targetLabel(t);
-    if (UPSCALE[t]) b.classList.add('ai');
-    if (TOOLS[t]) b.classList.add('tool');
-    b.disabled = state.busy;
-    b.onclick = () => { state.target = t; render(); };
-    box.append(b);
   }
+  // 파일을 넣은 뒤에는 넣는 곳을 작게 줄인다
+  $('drop').classList.toggle('compact', state.files.length > 0);
+  $('dropBig').textContent = state.files.length ? '파일 더 넣기' : '여기에 파일을 끌어다 놓으세요';
+  $('dropSmall').textContent = state.files.length ? '끌어다 놓거나 눌러서 선택' : '또는 눌러서 선택 · 여러 개를 한 번에 넣을 수 있어요';
+
+  // 형식 바꾸기·AI 화질 개선·도구는 성격이 달라 줄을 나눠 보여준다. 세기 선택은 AI 화질 개선 줄 안에.
+  const groups = [
+    { label: '변환', items: common.filter((t) => !UPSCALE[t] && !TOOLS[t]) },
+    { label: 'AI 화질 개선', items: common.filter((t) => UPSCALE[t]), extra: strengthRow },
+    { label: allPdf(usable) ? 'PDF 도구' : '도구', items: common.filter((t) => TOOLS[t]) },
+  ];
+  $('targets').replaceChildren(...groups.filter((g) => g.items.length).map((g) => {
+    const row = document.createElement('div');
+    row.className = 'group';
+    const label = document.createElement('div');
+    label.className = 'group-label';
+    label.textContent = g.label;
+    const chips = document.createElement('div');
+    chips.className = 'chips';
+    chips.append(...g.items.map(formatButton));
+    row.append(label, chips);
+    if (g.extra) row.append(g.extra);
+    return row;
+  }));
 
   const hint = $('targetHint');
   if (!state.files.length) hint.textContent = '파일을 먼저 선택하세요.';
@@ -133,23 +171,53 @@ function render() {
   $('officeNote').classList.toggle('hidden', !needsEngine);
   $('fontNote').classList.toggle('hidden', !(localFontsSupported() && usable.some((f) => categoryOf(f.name).engine === 'office')));
   const upscaling = !!UPSCALE[state.target];
+  $('upNote').textContent = STRENGTH_NOTES[state.strength];
   $('upNote').classList.toggle('hidden', !upscaling);
   // 세기 선택은 AI 화질 개선 버튼이 보이면 항상 함께 보여준다 (고르기 전에도 눈에 띄도록)
-  $('strengthRow').classList.toggle('hidden', !common.some((t) => UPSCALE[t]));
-  for (const b of document.querySelectorAll('[data-strength]')) {
-    b.setAttribute('aria-pressed', String((b.dataset.strength === 'strong') === state.strong));
+  strengthRow.classList.toggle('hidden', !common.some((t) => UPSCALE[t]));
+  for (const b of strengthRow.querySelectorAll('[data-strength]')) {
+    b.setAttribute('aria-pressed', String(b.dataset.strength === state.strength));
     b.disabled = state.busy;
   }
   $('upVideoNote').classList.toggle('hidden', !(upscaling && usable.some((f) => categoryOf(f.name).id === 'video')));
 
   const go = $('go');
   go.disabled = state.busy || !(usable.length && state.target);
+  go.classList.toggle('busy', state.busy);
   if (!state.busy) {
     if (!state.target) go.textContent = '변환하기';
     else if (UPSCALE[state.target]) go.textContent = `${targetLabel(state.target)}로 화질 높이기`;
-    else if (TOOLS[state.target]) go.textContent = `PDF ${targetLabel(state.target)}`;
+    else if (TOOLS[state.target]) go.textContent = `${allPdf(usable) ? 'PDF ' : ''}${targetLabel(state.target)}`;
     else go.textContent = `${state.target.toUpperCase()}(으)로 변환하기`;
   }
+}
+
+const allPdf = (usable) => usable.length > 0 && usable.every((f) => extOf(f.name) === 'pdf');
+
+/** 형식·도구 버튼 */
+function formatButton(t) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = `fmt${UPSCALE[t] ? ' ai' : ''}${TOOLS[t] ? ' tool' : ''}${t === state.target ? ' on' : ''}`;
+  b.setAttribute('aria-pressed', String(t === state.target));
+  const icon = UPSCALE[t] ? ICONS.sparkle : ICONS[t];
+  if (icon) b.insertAdjacentHTML('beforeend', icon);
+  b.append(targetLabel(t));
+  b.disabled = state.busy;
+  b.onclick = () => { state.target = t; render(); };
+  return b;
+}
+
+/** 그림만 있는 작은 버튼 (위로 올리기, 빼기) */
+function iconButton(icon, title, label) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'icon-btn';
+  b.title = title;
+  b.setAttribute('aria-label', label);
+  b.insertAdjacentHTML('beforeend', ICONS[icon]);
+  b.disabled = state.busy;
+  return b;
 }
 
 /** 사진 여러 장 → PDF 한 개로 합치기 (체크 상자로 고른다) */
@@ -172,16 +240,30 @@ function setMsg(text, kind = '', link = null) {
     a.className = 'dl';
     a.href = link.href;
     a.download = link.name;
-    a.textContent = `⬇ ${link.name} 받기`;
+    a.textContent = `${link.name} 받기`;
     msg.append('\n', a);
   }
+}
+
+/**
+ * 암호를 기다리는 동안 변환 버튼에 그렇다고 보여 준다 (도는 표시는 멈춘다). 다 받으면 원래대로.
+ */
+function waitingForPassword(promise) {
+  const go = $('go');
+  const text = go.textContent;
+  go.textContent = '암호 입력을 기다리는 중…';
+  go.classList.remove('busy');
+  return promise.finally(() => {
+    go.textContent = text;
+    go.classList.toggle('busy', state.busy);
+  });
 }
 
 /**
  * 암호를 묻는다 (메시지 자리에 입력 칸을 띄운다). 입력한 암호, 건너뛰면 null.
  */
 function askPassword(fileName, wrong) {
-  return new Promise((resolve) => {
+  return waitingForPassword(new Promise((resolve) => {
     const msg = $('msg');
     msg.className = 'ask';
     const form = document.createElement('form');
@@ -209,7 +291,56 @@ function askPassword(fileName, wrong) {
     skip.onclick = () => resolve(null);
     msg.replaceChildren(form);
     input.focus();
-  });
+  }));
+}
+
+/**
+ * PDF에 걸 새 암호를 정한다 (잘못 치지 않도록 두 번 입력). 정한 암호, 취소하면 null.
+ */
+function askNewPassword(count) {
+  return waitingForPassword(new Promise((resolve) => {
+    const msg = $('msg');
+    msg.className = 'ask';
+    const form = document.createElement('form');
+    form.className = 'password newpass';
+    const text = document.createElement('p');
+    text.textContent = `🔒 ${count > 1 ? `PDF ${count}개에` : 'PDF에'} 걸 암호를 정해 주세요. 열 때마다 이 암호를 물어요.`;
+    const input = document.createElement('input');
+    const again = document.createElement('input');
+    for (const [el, label] of [[input, '새 암호'], [again, '새 암호 한 번 더']]) {
+      el.type = 'password';
+      el.autocomplete = 'new-password';
+      el.required = true;
+      el.placeholder = label;
+      el.setAttribute('aria-label', label);
+    }
+    const ok = document.createElement('button');
+    ok.type = 'submit';
+    ok.textContent = '암호 걸기';
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'skip';
+    cancel.textContent = '취소';
+    const warn = document.createElement('p');
+    warn.className = 'warn hidden';
+    warn.textContent = '두 암호가 서로 다릅니다. 다시 입력해 주세요.';
+    const row = document.createElement('div');
+    row.append(input, again, ok, cancel);
+    form.append(text, row, warn);
+    form.onsubmit = (e) => {
+      e.preventDefault();
+      if (input.value !== again.value) {
+        warn.classList.remove('hidden');
+        again.value = '';
+        again.focus();
+        return;
+      }
+      resolve(input.value);
+    };
+    cancel.onclick = () => resolve(null);
+    msg.replaceChildren(form);
+    input.focus();
+  }));
 }
 
 function setBar(mode, pct = 0) {
@@ -267,6 +398,19 @@ async function run() {
   $('go').textContent = '변환 중…';
   render();
 
+  // 암호 걸기: 걸 암호를 먼저 정한다 (여러 파일이면 모두 같은 암호)
+  let newPassword = null;
+  if (target === 'protect') {
+    newPassword = await askNewPassword(files.length);
+    if (newPassword === null) {
+      state.busy = false;
+      render();
+      setMsg('암호를 정하지 않아 취소했습니다.');
+      return;
+    }
+    clickedAt = performance.now(); // 암호를 넣느라 걸린 시간 때문에 결과를 자동으로 못 받는 일이 없게
+  }
+
   const results = [];
   const errors = [];
   const passwords = new Map(); // 파일 이름 → 입력한 암호 (이번 변환 동안만 기억한다)
@@ -284,7 +428,8 @@ async function run() {
     const ctx = {
       status: (text) => { setMsg(`${prefix}${text}`); setBar('busy'); },
       progress: (p) => { setBar('progress', p); setState(`${Math.round(p * 100)}%`); },
-      strong: state.strong,
+      strength: state.strength,
+      newPassword,
       passwordFor: (name) => passwords.get(name),
     };
     setState('변환 중…');
@@ -353,6 +498,8 @@ function showTheme() {
   for (const b of document.querySelectorAll('[data-theme-choice]')) {
     b.setAttribute('aria-pressed', String(b.dataset.themeChoice === currentTheme()));
   }
+  // 휴대폰 브라우저 위쪽 막대 색도 페이지 바탕에 맞춘다
+  for (const m of document.querySelectorAll('meta[name="theme-color"]')) m.content = currentTheme() === 'dark' ? '#0d1015' : '#f3f4f6';
 }
 for (const b of document.querySelectorAll('[data-theme-choice]')) {
   b.onclick = () => {
@@ -367,8 +514,8 @@ showTheme();
 // AI 화질 개선 세기 (고른 것은 기억한다)
 for (const b of document.querySelectorAll('[data-strength]')) {
   b.onclick = () => {
-    state.strong = b.dataset.strength === 'strong';
-    try { localStorage.setItem('upscale-strength', state.strong ? 'strong' : 'natural'); } catch { /* 저장 불가해도 동작 */ }
+    state.strength = b.dataset.strength;
+    try { localStorage.setItem('upscale-strength', state.strength); } catch { /* 저장 불가해도 동작 */ }
     render();
   };
 }
