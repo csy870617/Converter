@@ -131,6 +131,7 @@ npm test           # 실제 브라우저로 모든 변환을 시험 (build 후 �
 | [ONNX Runtime Web](https://onnxruntime.ai/), [Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN) | AI 화질 개선 | MIT, BSD-3-Clause |
 | UTIF.js, gifenc, fflate | TIFF·GIF·ZIP, 256색 PNG | MIT |
 | 나눔고딕·나눔명조, Liberation, Noto Serif/Sans KR(한자만), DejaVu Sans(기호만) | 글꼴 | SIL OFL 1.1, Bitstream Vera ([자세히](public/fonts/README.txt)) |
+| [Pretendard](https://github.com/orioncactus/pretendard) | 화면 글꼴 (쓰인 글자가 든 조각만 받는다) | SIL OFL 1.1 |
 
 PyMuPDF(MuPDF)는 AGPL-3.0, FFmpeg(x264 포함)는 GPL로 배포됩니다. 이 사이트를 고쳐서 다른 곳에 공개할 때는
 고친 소스 코드도 같은 조건으로 공개해야 합니다 (이 저장소처럼 소스를 공개해 두면 됩니다).
