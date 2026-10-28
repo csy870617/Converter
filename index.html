@@ -4,8 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="description" content="MP4→MP3, Word→PDF, PDF→Word, 한글(HWP)→PDF, 사진→JPG 등 자주 쓰는 파일 변환, 사진·동영상·PDF 용량 줄이기, PDF 돌리기·암호 풀기, AI 사진·동영상 화질 개선. 파일이 서버로 전송되지 않습니다.">
-<meta name="theme-color" content="#f3f4f6" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#0d1015" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#111318" media="(prefers-color-scheme: dark)">
 <title>파일 변환기</title>
 <link rel="icon" href="favicon.png">
 <script>
@@ -14,46 +14,48 @@
 </script>
 </head>
 <body>
-<div class="app">
-  <header class="top">
-    <div class="brand">
-      <svg class="logo" viewBox="0 0 40 40" aria-hidden="true">
-        <defs><linearGradient id="logo-bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#4c8dff"/><stop offset="1" stop-color="#1f55e0"/></linearGradient></defs>
-        <rect width="40" height="40" rx="10" fill="url(#logo-bg)"/>
-        <path d="M11 15.5h17M23.5 10.5l5 5-5 5M29 24.5H12M16.5 19.5l-5 5 5 5" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
-      </svg>
-      <div>
-        <h1>파일 변환기</h1>
-        <p class="tagline"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7.5a4 4 0 0 1 8 0V11"/></svg>파일을 서버에 올리지 않고 이 기기에서 바로 변환합니다</p>
-      </div>
-    </div>
-    <div class="seg theme" role="group" aria-label="화면 모드">
-      <button type="button" data-theme-choice="light"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.5"/><path d="M12 1.5v3M12 19.5v3M1.5 12h3M19.5 12h3M4.6 4.6l2.1 2.1M17.3 17.3l2.1 2.1M4.6 19.4l2.1-2.1M17.3 6.7l2.1-2.1"/></svg><span class="txt">라이트</span></button>
-      <button type="button" data-theme-choice="dark"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 14.5A8.5 8.5 0 0 1 9.5 3.5a8.5 8.5 0 1 0 11 11z"/></svg><span class="txt">다크</span></button>
-    </div>
-  </header>
+<header class="nav">
+  <div class="brand">
+    <svg class="logo" viewBox="0 0 32 32" aria-hidden="true">
+      <rect width="32" height="32" rx="9"/>
+      <path d="M9 12.5h13.5M18.5 8.5l4 4-4 4M23 19.5H9.5M13.5 15.5l-4 4 4 4"/>
+    </svg>
+    <span>파일 변환기</span>
+  </div>
+  <button type="button" id="themeBtn" class="round-btn" aria-label="화면 모드 바꾸기">
+    <svg class="i-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 14.5A8.5 8.5 0 0 1 9.5 3.5a8.5 8.5 0 1 0 11 11z"/></svg>
+    <svg class="i-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.5"/><path d="M12 1.5v3M12 19.5v3M1.5 12h3M19.5 12h3M4.6 4.6l2.1 2.1M17.3 17.3l2.1 2.1M4.6 19.4l2.1-2.1M17.3 6.7l2.1-2.1"/></svg>
+  </button>
+</header>
 
-  <main class="panel">
-    <section class="sec">
-      <div class="sec-head">
-        <h2 class="step"><span>1</span>파일 선택</h2>
-        <div class="sec-side" id="filesInfo"></div>
-      </div>
-      <div id="drop" tabindex="0" role="button" aria-label="파일 선택">
-        <span class="drop-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V4M7.5 8.5 12 4l4.5 4.5"/><path d="M4 14.5v3.5a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3.5"/></svg></span>
-        <span class="big" id="dropBig">여기에 파일을 끌어다 놓으세요</span>
-        <span class="small" id="dropSmall">또는 눌러서 선택 · 여러 개를 한 번에 넣을 수 있어요</span>
-      </div>
-      <input id="picker" type="file" multiple hidden>
-      <ul id="files"></ul>
-    </section>
+<main class="wrap">
+  <section class="hero">
+    <h1>파일 변환, 브라우저에서 바로</h1>
+    <p>사진·동영상·오디오·문서·PDF를 원하는 형식으로 바꾸고,<br class="br-wide"> 용량을 줄이고, 화질을 높여 보세요.</p>
+    <ul class="trust">
+      <li>설치 없이 바로</li>
+      <li>파일을 서버로 보내지 않음</li>
+      <li>무료</li>
+    </ul>
+  </section>
 
-    <section class="sec">
-      <div class="sec-head">
-        <h2 class="step"><span>2</span>바꿀 형식 선택</h2>
-      </div>
+  <section class="tool" aria-label="변환">
+    <div id="drop" tabindex="0" role="button" aria-label="파일 선택">
+      <span class="drop-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V4M7.5 8.5 12 4l4.5 4.5"/><path d="M4 14.5v3.5a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3.5"/></svg></span>
+      <span class="drop-text">
+        <strong id="dropBig">파일을 여기에 끌어다 놓으세요</strong>
+        <span id="dropSmall">사진·동영상·오디오·문서·PDF, 여러 개를 한 번에 넣을 수 있어요</span>
+      </span>
+      <span class="pick" aria-hidden="true">파일 선택</span>
+    </div>
+    <input id="picker" type="file" multiple hidden>
+    <div class="files-bar" id="filesInfo"></div>
+    <ul id="files"></ul>
+
+    <div class="choose">
+      <h2>어떻게 바꿀까요?</h2>
       <div id="targets"></div>
-      <p id="targetHint" class="hint">파일을 먼저 선택하세요.</p>
+      <p id="targetHint" class="hint">파일을 넣으면 바꿀 수 있는 형식이 여기에 나타나요.</p>
       <div class="strength hidden" id="strengthRow" role="group" aria-label="화질 개선 세기">
         <span>세기</span>
         <div class="seg">
@@ -67,26 +69,26 @@
       <p class="note hidden" id="upNote"></p>
       <p class="note hidden" id="upVideoNote">동영상은 오래 걸려요. 짧은 영상부터 해 보세요. (최대 4K)</p>
       <p class="note hidden" id="officeNote">처음 한 번은 준비하느라 1~2분 걸립니다.<span id="fontNote"> 문서 변환 때 <b>글꼴 사용</b>을 물으면 허용해 주세요. 컴퓨터에 있는 글꼴로 더 정확하게 변환합니다.</span></p>
-    </section>
+    </div>
 
-    <section class="sec action">
+    <div class="action">
       <button id="go" disabled>변환하기</button>
       <div class="bar" id="bar"><div></div></div>
       <div id="msg" aria-live="polite"></div>
-    </section>
-  </main>
+    </div>
+  </section>
 
   <details class="formats">
     <summary>지원하는 형식 보기</summary>
     <table id="formats"></table>
     <p class="hint">1GB가 넘는 동영상은 실패할 수 있습니다.</p>
   </details>
+</main>
 
-  <footer class="foot">
-    모든 변환은 이 브라우저 안에서 이루어지며, 파일은 어디로도 전송되지 않습니다.<br>
-    오픈 소스 · <a href="https://github.com/csy870617/Converter">소스 코드 보기</a>
-  </footer>
-</div>
+<footer class="foot">
+  모든 변환은 이 브라우저 안에서 이루어지며, 파일은 어디로도 전송되지 않습니다.<br>
+  오픈 소스 · <a href="https://github.com/csy870617/Converter">소스 코드 보기</a>
+</footer>
 <script type="module" src="/src/main.js"></script>
 </body>
 </html>

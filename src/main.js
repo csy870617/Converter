@@ -1,3 +1,5 @@
+// 글꼴: Pretendard (SIL OFL 1.1). 화면에 쓰인 글자가 든 조각만 받는다.
+import 'pretendard/dist/web/variable/pretendardvariable-dynamic-subset.css';
 import './style.css';
 import { CATEGORIES, ConvertError, MIME, PasswordError, TOOLS, UPSCALE, categoryOf, extOf, stemOf, targetLabel, targetsFor } from './formats.js';
 import { LOAD_FAILED, convertFile, imagesToPdf, isLoadFailure, mergePdfs, officeSupported } from './engines.js';
@@ -83,25 +85,29 @@ function render() {
   state.files.forEach((f, i) => {
     const ok = targetsFor(f.name).length > 0;
     const li = document.createElement('li');
-    // 파일 종류 표시 (확장자, 종류마다 색)
+    // 파일 종류(확장자) · 이름과 크기 · 진행 상태
     const badge = document.createElement('span');
-    badge.className = `badge b-${ok ? categoryOf(f.name).id : 'none'}`;
+    badge.className = 'badge';
     badge.textContent = (extOf(f.name) || '?').slice(0, 4).toUpperCase();
     badge.setAttribute('aria-hidden', 'true');
+    const meta = document.createElement('span');
+    meta.className = 'fmeta';
     const name = document.createElement('span');
     name.className = 'name';
     name.textContent = f.name;
     name.title = f.name;
-    const info = document.createElement('span');
+    const size = document.createElement('span');
+    size.className = ok ? 'size' : 'size bad';
+    size.textContent = ok ? prettySize(f.size) : '지원하지 않는 형식';
+    meta.append(name, size);
+    li.append(badge, meta);
     const st = state.status.get(f);
     if (st) {
+      const info = document.createElement('span');
       info.className = `state ${st.kind || ''}`;
       info.textContent = st.text;
-    } else {
-      info.className = ok ? 'size' : 'size bad';
-      info.textContent = ok ? prettySize(f.size) : '지원하지 않는 형식';
+      li.append(info);
     }
-    li.append(badge, name, info);
     // 여러 파일을 하나로 합칠 때는 목록 순서대로 합치므로 순서를 바꿀 수 있게 한다
     if (merging() && i > 0) {
       const up = iconButton('up', '위로 올리기', `${f.name} 위로`);
@@ -120,7 +126,11 @@ function render() {
   summary.replaceChildren();
   if (state.files.length) {
     const total = state.files.reduce((sum, f) => sum + f.size, 0);
-    summary.append(`${state.files.length}개 · ${prettySize(total)}`);
+    const label = document.createElement('span');
+    const b = document.createElement('b');
+    b.textContent = '선택한 파일';
+    label.append(b, `${state.files.length}개 · ${prettySize(total)}`);
+    summary.append(label);
     if (state.files.length > 1) {
       const clear = document.createElement('button');
       clear.type = 'button';
@@ -133,8 +143,8 @@ function render() {
   }
   // 파일을 넣은 뒤에는 넣는 곳을 작게 줄인다
   $('drop').classList.toggle('compact', state.files.length > 0);
-  $('dropBig').textContent = state.files.length ? '파일 더 넣기' : '여기에 파일을 끌어다 놓으세요';
-  $('dropSmall').textContent = state.files.length ? '끌어다 놓거나 눌러서 선택' : '또는 눌러서 선택 · 여러 개를 한 번에 넣을 수 있어요';
+  $('dropBig').textContent = state.files.length ? '파일 더 넣기' : '파일을 여기에 끌어다 놓으세요';
+  $('dropSmall').textContent = state.files.length ? '끌어다 놓거나 눌러서 선택' : '사진·동영상·오디오·문서·PDF, 여러 개를 한 번에 넣을 수 있어요';
 
   // 형식 바꾸기·AI 화질 개선·도구는 성격이 달라 줄을 나눠 보여준다. 세기 선택은 AI 화질 개선 줄 안에.
   const groups = [
@@ -157,9 +167,9 @@ function render() {
   }));
 
   const hint = $('targetHint');
-  if (!state.files.length) hint.textContent = '파일을 먼저 선택하세요.';
+  if (!state.files.length) hint.textContent = '파일을 넣으면 바꿀 수 있는 형식이 여기에 나타나요.';
   else if (!usable.length) hint.textContent = '지원하지 않는 파일입니다.';
-  else if (!common.length) hint.textContent = '같은 종류의 파일끼리 변환해 주세요.';
+  else if (!common.length) hint.textContent = '같은 종류의 파일끼리 넣어 주세요.';
   else hint.textContent = '';
   hint.classList.toggle('hidden', !hint.textContent);
 
@@ -188,11 +198,13 @@ function render() {
     if (!state.target) go.textContent = '변환하기';
     else if (UPSCALE[state.target]) go.textContent = `${targetLabel(state.target)}로 화질 높이기`;
     else if (TOOLS[state.target]) go.textContent = `${allPdf(usable) ? 'PDF ' : ''}${targetLabel(state.target)}`;
-    else go.textContent = `${state.target.toUpperCase()}(으)로 변환하기`;
+    else go.textContent = `${state.target.toUpperCase()}${TAKES_EURO.includes(state.target) ? '으로' : '로'} 변환하기`;
   }
 }
 
 const allPdf = (usable) => usable.length > 0 && usable.every((f) => extOf(f.name) === 'pdf');
+// 읽는 소리가 받침으로 끝나는 형식 이름 (웹엠·플락·독 → '으로', 나머지는 '로')
+const TAKES_EURO = ['webm', 'flac', 'doc'];
 
 /** 형식·도구 버튼 */
 function formatButton(t) {
@@ -271,7 +283,7 @@ function askPassword(fileName, wrong) {
     const text = document.createElement('p');
     text.textContent = wrong
       ? `암호가 맞지 않습니다. ${fileName}의 암호를 다시 입력해 주세요.`
-      : `🔒 ${fileName}에 암호가 걸려 있습니다. 암호를 입력해 주세요.`;
+      : `${fileName}에 암호가 걸려 있습니다. 암호를 입력해 주세요.`;
     const input = document.createElement('input');
     input.type = 'password';
     input.autocomplete = 'off';
@@ -304,7 +316,7 @@ function askNewPassword(count) {
     const form = document.createElement('form');
     form.className = 'password newpass';
     const text = document.createElement('p');
-    text.textContent = `🔒 ${count > 1 ? `PDF ${count}개에` : 'PDF에'} 걸 암호를 정해 주세요. 열 때마다 이 암호를 물어요.`;
+    text.textContent = `${count > 1 ? `PDF ${count}개에` : 'PDF에'} 걸 암호를 정해 주세요. 열 때마다 이 암호를 물어요.`;
     const input = document.createElement('input');
     const again = document.createElement('input');
     for (const [el, label] of [[input, '새 암호'], [again, '새 암호 한 번 더']]) {
@@ -494,20 +506,21 @@ const darkQuery = window.matchMedia('(prefers-color-scheme: dark)');
 function currentTheme() {
   return document.documentElement.dataset.theme || (darkQuery.matches ? 'dark' : 'light');
 }
+const themeBtn = $('themeBtn');
 function showTheme() {
-  for (const b of document.querySelectorAll('[data-theme-choice]')) {
-    b.setAttribute('aria-pressed', String(b.dataset.themeChoice === currentTheme()));
-  }
+  const dark = currentTheme() === 'dark';
+  themeBtn.dataset.mode = dark ? 'dark' : 'light'; // 지금 모드의 반대 그림을 보여 준다 (누르면 그쪽으로)
+  themeBtn.title = dark ? '라이트 모드로 바꾸기' : '다크 모드로 바꾸기';
+  themeBtn.setAttribute('aria-label', themeBtn.title);
   // 휴대폰 브라우저 위쪽 막대 색도 페이지 바탕에 맞춘다
-  for (const m of document.querySelectorAll('meta[name="theme-color"]')) m.content = currentTheme() === 'dark' ? '#0d1015' : '#f3f4f6';
+  for (const m of document.querySelectorAll('meta[name="theme-color"]')) m.content = dark ? '#111318' : '#ffffff';
 }
-for (const b of document.querySelectorAll('[data-theme-choice]')) {
-  b.onclick = () => {
-    document.documentElement.dataset.theme = b.dataset.themeChoice;
-    try { localStorage.setItem('theme', b.dataset.themeChoice); } catch { /* 저장 불가해도 동작 */ }
-    showTheme();
-  };
-}
+themeBtn.onclick = () => {
+  const next = currentTheme() === 'dark' ? 'light' : 'dark';
+  document.documentElement.dataset.theme = next;
+  try { localStorage.setItem('theme', next); } catch { /* 저장 불가해도 동작 */ }
+  showTheme();
+};
 darkQuery.addEventListener('change', showTheme);
 showTheme();
 
