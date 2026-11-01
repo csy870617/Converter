@@ -11,7 +11,8 @@ MP4 → MP3, Word → PDF, PDF → Word, 한글(HWP) → PDF, 아이폰 사진(H
 - **돌리기**: 옆으로 누운 사진·스캔한 PDF를 오른쪽·왼쪽으로 돌립니다.
 - **PDF 도구**: 용량 줄이기, 돌리기, 쪽 나누기, 합치기, **암호 풀기·암호 걸기**, PDF 속 표를 엑셀로 꺼내기.
 - **암호가 걸린 파일**(카드 명세서 PDF, 암호 걸린 엑셀·Word·한글 문서)은 암호를 물어서 변환합니다. 암호는 그 변환에만 쓰고 어디에도 저장하거나 보내지 않습니다.
-- **AI 화질 개선**: 흐릿하거나 작은 사진·동영상을 2배/4배로 키우면서 선명하게 만듭니다.
+- **AI 화질 개선**: 흐릿하거나 작은 사진을 2배·4배·8배, 동영상을 2배·4배(최대 4K)로 키우면서 선명하게 만듭니다.
+  만화·로고처럼 선이 또렷한 그림은 **그림용 AI**로, 끝나면 원본과 결과를 끌어서 **전후 비교**할 수 있습니다.
 
 ## 지원 형식
 
@@ -19,7 +20,7 @@ MP4 → MP3, Word → PDF, PDF → Word, 한글(HWP) → PDF, 아이폰 사진(H
 |---|---|---|
 | 동영상 | MP4, MOV, AVI, MKV, WEBM, WMV, FLV, M2TS·MTS(캠코더), VOB, RM·RMVB … | MP4, MOV, AVI, WEBM, GIF, **MP3**, WAV, M4A, **고화질 2배·4배**, **용량 줄이기** |
 | 오디오 | MP3, WAV, M4A, AAC, FLAC, OGG, WMA, OPUS, AIFF, APE … | MP3, WAV, M4A, AAC, FLAC, OGG, OPUS, **M4R(아이폰 벨소리)**, **용량 줄이기** |
-| 이미지 | JPG, PNG, WEBP, **HEIC**, AVIF, BMP, GIF, TIFF, SVG, ICO | JPG, PNG, WEBP, **PDF**, GIF, BMP, TIFF, ICO, **고화질 2배·4배**, **용량 줄이기**, 오른쪽·왼쪽으로 돌리기 (움직이는 GIF → MP4) |
+| 이미지 | JPG, PNG, WEBP, **HEIC**, AVIF, BMP, GIF, TIFF, SVG, ICO | JPG, PNG, WEBP, **PDF**, GIF, BMP, TIFF, ICO, **고화질 2배·4배·8배**, **용량 줄이기**, 오른쪽·왼쪽으로 돌리기 (움직이는 GIF → MP4) |
 | Word 문서 | DOC, DOCX, ODT, RTF, TXT … | **PDF**, DOCX, DOC, ODT, RTF, TXT, JPG·PNG(쪽마다) |
 | **한글 문서** | **HWP, HWPX** | **PDF**, DOCX(Word), JPG·PNG(쪽마다), TXT |
 | 프레젠테이션 | PPT, PPTX, PPS, ODP … | **PDF**, PPTX, PPT, ODP, JPG·PNG(장마다) |
@@ -69,6 +70,11 @@ MP4 → MP3, Word → PDF, PDF → Word, 한글(HWP) → PDF, 아이폰 사진(H
 - 사진으로 찍은(스캔한) PDF는 글자가 그림이라 Word·엑셀로 바꿔도 그림으로 들어갑니다.
 - AI 화질 개선은 [Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN) 모델을 브라우저 안에서 돌립니다.
   - **원본을 훼손하지 않도록** AI 결과를 원래 크기로 다시 줄였을 때 원본과 같아지도록 바로잡습니다(역투영). 그래서 없는 무늬를 지어내거나 얼굴·글자·색이 바뀌는 왜곡이 크게 줄었습니다. 측정 결과는 [scripts/model/README.md](scripts/model/README.md)에 있습니다.
+  - 종류는 두 가지입니다 (사진만, 동영상은 늘 사진용).
+    - **사진**(기본): 사진과 붓으로 칠한 그림.
+    - **그림**: 만화·애니메이션·로고·도표처럼 선이 또렷한 그림. 윤곽선이 흐려지지 않고 원본처럼 검고 매끈하게 살아납니다(Real-ESRGAN anime_6B, 모델 약 9~18MB, 사진용보다 약 5배 느림).
+  - **8배**는 AI를 두 번 거칩니다(2배로 키운 결과를 다시 4배). 한 번 4배 한 뒤 단순히 늘리는 것보다 훨씬 또렷합니다.
+  - 사진 한 장을 키우면 **전후 비교** 화면이 나옵니다. 가운데 막대를 끌어 원본과 결과를 비교하고, 그림을 누르면 그 부분을 3배로 크게 봅니다.
   - 세기는 세 가지입니다.
     - **원본**: 원본의 결(잡음·필름 입자·압축 흔적)까지 그대로 살려 키웁니다. 결과를 원래 크기로 줄이면 원본과 똑같아지도록 맞춰, AI가 지우거나 바꾸는 것이 가장 적습니다. JPG·동영상처럼 압축된 파일에서 자연스럽게와 차이가 납니다(PNG 같은 무손실 원본은 자연스럽게도 원본과 똑같이 맞춥니다).
     - **자연스럽게**(기본): 흐릿한 부분은 선명하게, 압축 때문에 생긴 얼룩은 깨끗하게 합니다.
@@ -108,7 +114,7 @@ npm test           # 실제 브라우저로 모든 변환을 시험 (build 후 �
 - `src/xlsx.js`: PDF에서 꺼낸 표로 엑셀 파일 만들기
 - `src/localfonts.js`: 내 컴퓨터 글꼴 쓰기 (Local Font Access)
 - `src/upscale.js`: AI 화질 개선 ([ONNX Runtime Web](https://onnxruntime.ai/), 동영상 풀기·묶기 [Mediabunny](https://mediabunny.dev/))
-- `scripts/model/`: AI 모델 만들기(`build.py`)와 화질 측정(`evaluate.py`). 모델 파일은 `public/models/`
+- `scripts/model/`: AI 모델 만들기(`build.py`)와 화질 측정(`evaluate.py`, 그림용 비교 `evaluate_art.py`). 모델 파일은 `public/models/`
 - `public/sw.js`: 서비스 워커. GitHub Pages에서 할 수 없는 보안 헤더 설정과 압축된 엔진 파일 풀기를 대신 합니다.
 - `scripts/prepare-assets.mjs`: 큰 엔진 파일을 압축해 `public/`에 준비하고, 파이썬 휠 파일을 정해 둔 판만 받아 확인합니다.
 - `public/fonts/`: 글꼴과 글꼴 대체표 ([public/fonts/README.txt](public/fonts/README.txt))

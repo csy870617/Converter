@@ -9,3 +9,4 @@ public/pdfjs/
 .venv/
 __pycache__/
 public/pyodide/
+scripts/model/.cache/

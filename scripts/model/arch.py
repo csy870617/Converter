@@ -45,6 +45,8 @@ WEIGHTS = {
     'general': 'https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesr-general-x4v3.pth',
     'x4plus': 'https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth',
     'esrnet': 'https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.1/RealESRNet_x4plus.pth',
+    'anime': 'https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesr-animevideov3.pth',
+    'anime6b': 'https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.2.4/RealESRGAN_x4plus_anime_6B.pth',
 }
 def fetch(url):
     os.makedirs(CACHE, exist_ok=True)
@@ -52,6 +54,8 @@ def fetch(url):
     if not os.path.exists(path): urllib.request.urlretrieve(url, path)
     return path
 def load(name):
-    m = SRVGGNetCompact() if name in ('general', 'wdn') else RRDBNet()
+    # anime: 그림·애니메이션용 가벼운 모델(합성곱 16층), anime6b: 그림용 무거운 모델(RRDB 6개)
+    m = (SRVGGNetCompact() if name in ('general', 'wdn') else SRVGGNetCompact(num_conv=16) if name == 'anime'
+         else RRDBNet(nb=6) if name == 'anime6b' else RRDBNet())
     m.load_state_dict(sd(fetch(WEIGHTS[name])))
     return m.eval()

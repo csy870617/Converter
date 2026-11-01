@@ -16,17 +16,23 @@ const STRENGTH_NOTES = {
   natural: '원본은 그대로 두고 흐릿한 부분만 선명하게, 압축 때문에 생긴 얼룩은 깨끗하게 합니다.',
   strong: '자연스럽게에 윤곽을 한 번 더 또렷하게 합니다. 1080p처럼 이미 괜찮은 영상에서 차이가 잘 보여요.',
 };
-const state = { files: [], target: null, busy: false, status: new Map(), strength: 'natural' };
+// AI 화질 개선 종류 (사진만): 'photo'(사진, 기본) | 'art'(그림: 만화·애니·로고·도표처럼 선이 또렷한 그림)
+const KINDS = ['photo', 'art'];
+const ART_NOTE = '선이 또렷한 그림(만화·애니·로고·도표)에 맞춘 AI로 키워요. 사진과 붓으로 그린 그림은 ‘사진’이 더 자연스러워요.';
+const state = { files: [], target: null, busy: false, status: new Map(), strength: 'natural', kind: 'photo' };
 try {
   const saved = localStorage.getItem('upscale-strength');
   if (STRENGTHS.includes(saved)) state.strength = saved;
+  const kind = localStorage.getItem('upscale-kind');
+  if (KINDS.includes(kind)) state.kind = kind;
 } catch { /* 저장 불가해도 동작 */ }
 let lastUrl = null;
 let downloads = 0; // 이 페이지에서 자동으로 내려받은 횟수
 let clickedAt = 0; // '변환하기'를 누른 시각
 
 const IMAGE = CATEGORIES.find((c) => c.id === 'image');
-// 세기 선택 막대는 AI 화질 개선 줄 안으로 옮겨 다니므로(화면에서 빠져 있을 때도 있다) 처음에 잡아 둔다
+// 종류·세기 선택 막대는 AI 화질 개선 줄 안으로 옮겨 다니므로(화면에서 빠져 있을 때도 있다) 처음에 잡아 둔다
+const kindRow = $('kindRow');
 const strengthRow = $('strengthRow');
 
 // 작은 그림(아이콘). 모두 aria-hidden이라 버튼 이름은 글자만 읽힌다.
@@ -149,7 +155,7 @@ function render() {
   // 형식 바꾸기·AI 화질 개선·도구는 성격이 달라 줄을 나눠 보여준다. 세기 선택은 AI 화질 개선 줄 안에.
   const groups = [
     { label: '변환', items: common.filter((t) => !UPSCALE[t] && !TOOLS[t]) },
-    { label: 'AI 화질 개선', items: common.filter((t) => UPSCALE[t]), extra: strengthRow },
+    { label: 'AI 화질 개선', items: common.filter((t) => UPSCALE[t]), extra: [kindRow, strengthRow] },
     { label: allPdf(usable) ? 'PDF 도구' : '도구', items: common.filter((t) => TOOLS[t]) },
   ];
   $('targets').replaceChildren(...groups.filter((g) => g.items.length).map((g) => {
@@ -162,7 +168,7 @@ function render() {
     chips.className = 'chips';
     chips.append(...g.items.map(formatButton));
     row.append(label, chips);
-    if (g.extra) row.append(g.extra);
+    if (g.extra) row.append(...g.extra);
     return row;
   }));
 
@@ -181,8 +187,17 @@ function render() {
   $('officeNote').classList.toggle('hidden', !needsEngine);
   $('fontNote').classList.toggle('hidden', !(localFontsSupported() && usable.some((f) => categoryOf(f.name).engine === 'office')));
   const upscaling = !!UPSCALE[state.target];
-  $('upNote').textContent = STRENGTH_NOTES[state.strength];
+  // 종류(사진/그림)는 사진에만 고른다 (동영상은 늘 사진용 AI)
+  const imagesOnly = usable.length > 0 && usable.every((f) => categoryOf(f.name).id === 'image');
+  const art = imagesOnly && state.kind === 'art';
+  $('upNote').textContent = [art && ART_NOTE, STRENGTH_NOTES[state.strength],
+    state.target === 'up8' && '8배는 AI를 두 번 거쳐 더 또렷하게 키우는 대신 시간이 더 걸려요.'].filter(Boolean).join(' ');
   $('upNote').classList.toggle('hidden', !upscaling);
+  kindRow.classList.toggle('hidden', !(imagesOnly && common.some((t) => UPSCALE[t])));
+  for (const b of kindRow.querySelectorAll('[data-kind]')) {
+    b.setAttribute('aria-pressed', String(b.dataset.kind === state.kind));
+    b.disabled = state.busy;
+  }
   // 세기 선택은 AI 화질 개선 버튼이 보이면 항상 함께 보여준다 (고르기 전에도 눈에 띄도록)
   strengthRow.classList.toggle('hidden', !common.some((t) => UPSCALE[t]));
   for (const b of strengthRow.querySelectorAll('[data-strength]')) {
@@ -243,6 +258,7 @@ function merging() {
 }
 
 function setMsg(text, kind = '', link = null) {
+  clearPreview();
   const msg = $('msg');
   msg.className = kind;
   msg.textContent = text;
@@ -441,6 +457,7 @@ async function run() {
       status: (text) => { setMsg(`${prefix}${text}`); setBar('busy'); },
       progress: (p) => { setBar('progress', p); setState(`${Math.round(p * 100)}%`); },
       strength: state.strength,
+      kind: files.every((x) => categoryOf(x.name).id === 'image') ? state.kind : 'photo',
       newPassword,
       passwordFor: (name) => passwords.get(name),
     };
@@ -499,6 +516,92 @@ async function run() {
   if (notes.length) text += `\n${notes.join('\n')}`;
   if (warnings.length) text += `\n\n${warnings.join('\n')}`;
   setMsg(text, errors.length || warnings.length ? 'err' : 'ok', link);
+  // 사진 한 장의 화질 개선이면 원본과 결과를 나란히 비교해 볼 수 있게 한다
+  if (single && !errors.length && results[0].compare) showPreview(results[0].compare, link.href);
+}
+
+// ---------------------------------------------------------------------------
+// 전후 비교: 가운데 막대를 끌어 원본(왼쪽)과 AI 결과(오른쪽)를 비교하고, 누르면 그 자리를 크게 본다
+// ---------------------------------------------------------------------------
+let previewUrl = null;
+
+function clearPreview() {
+  $('preview').replaceChildren();
+  if (previewUrl) URL.revokeObjectURL(previewUrl);
+  previewUrl = null;
+}
+
+function showPreview({ before, from, to }, afterUrl) {
+  clearPreview();
+  if (to[0] * to[1] > 50_000_000) return; // 너무 큰 결과는 화면에 띄우지 않는다 (휴대폰 메모리)
+  previewUrl = URL.createObjectURL(before);
+  const fig = document.createElement('figure');
+  fig.className = 'compare';
+  fig.style.aspectRatio = `${to[0]} / ${to[1]}`;
+  const picture = (src, alt) => {
+    const img = new Image();
+    img.src = src;
+    img.alt = alt;
+    img.draggable = false;
+    return img;
+  };
+  const tag = (cls, text) => {
+    const t = document.createElement('span');
+    t.className = `tag ${cls}`;
+    t.textContent = text;
+    return t;
+  };
+  const after = document.createElement('div');
+  after.className = 'after';
+  after.append(picture(afterUrl, `AI 결과 ${to[0]}×${to[1]}`));
+  const divider = document.createElement('div');
+  divider.className = 'divider';
+  // 키보드로도 움직일 수 있게 (화면에는 보이지 않는다)
+  const range = document.createElement('input');
+  range.type = 'range';
+  range.className = 'slider';
+  range.setAttribute('aria-label', '원본과 AI 결과를 나누는 위치');
+  fig.append(picture(previewUrl, `원본 ${from[0]}×${from[1]}`), after, divider,
+    tag('tag-l', `원본 ${from[0]}×${from[1]}`), tag('tag-r', `AI ${to[0]}×${to[1]}`), range);
+  const hint = document.createElement('p');
+  hint.className = 'compare-hint';
+  hint.textContent = '가운데 막대를 끌어 비교하고, 그림을 누르면 그 부분을 크게 볼 수 있어요.';
+  $('preview').append(fig, hint);
+
+  const setPos = (p) => {
+    p = Math.min(100, Math.max(0, p));
+    fig.style.setProperty('--pos', `${p}%`);
+    range.value = String(Math.round(p));
+  };
+  const at = (e) => {
+    const r = fig.getBoundingClientRect();
+    return [((e.clientX - r.left) / r.width) * 100, ((e.clientY - r.top) / r.height) * 100];
+  };
+  const zoomAt = ([x, y]) => {
+    fig.style.setProperty('--zx', `${x}%`);
+    fig.style.setProperty('--zy', `${y}%`);
+  };
+  setPos(50);
+  range.oninput = () => setPos(Number(range.value));
+  let press = null;
+  fig.onpointerdown = (e) => {
+    press = { x: e.clientX, y: e.clientY, moved: false };
+    fig.setPointerCapture(e.pointerId);
+  };
+  fig.onpointermove = (e) => {
+    if (fig.classList.contains('zoom') && e.pointerType === 'mouse' && !press?.moved) zoomAt(at(e)); // 크게 볼 때는 마우스를 따라 움직인다
+    if (!press) return;
+    if (Math.abs(e.clientX - press.x) + Math.abs(e.clientY - press.y) > 4) press.moved = true;
+    if (press.moved) setPos(at(e)[0]);
+  };
+  fig.onpointerup = (e) => {
+    if (press && !press.moved) { // 누르기만 했으면 그 자리를 크게 / 다시 누르면 원래대로
+      zoomAt(at(e));
+      fig.classList.toggle('zoom');
+    }
+    press = null;
+  };
+  fig.onpointercancel = () => { press = null; };
 }
 
 // 라이트/다크 모드 전환 (처음에는 기기 설정을 따르고, 고르면 기억한다)
@@ -524,11 +627,18 @@ themeBtn.onclick = () => {
 darkQuery.addEventListener('change', showTheme);
 showTheme();
 
-// AI 화질 개선 세기 (고른 것은 기억한다)
+// AI 화질 개선 세기·종류 (고른 것은 기억한다)
 for (const b of document.querySelectorAll('[data-strength]')) {
   b.onclick = () => {
     state.strength = b.dataset.strength;
     try { localStorage.setItem('upscale-strength', state.strength); } catch { /* 저장 불가해도 동작 */ }
+    render();
+  };
+}
+for (const b of document.querySelectorAll('[data-kind]')) {
+  b.onclick = () => {
+    state.kind = b.dataset.kind;
+    try { localStorage.setItem('upscale-kind', state.kind); } catch { /* 저장 불가해도 동작 */ }
     render();
   };
 }

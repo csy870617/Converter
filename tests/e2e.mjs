@@ -142,10 +142,10 @@ function imageWidth(b) {
   return 0;
 }
 
-const LABEL = { up2: '고화질 2배', up4: '고화질 4배', compress: '용량 줄이기', split: '쪽 나누기', merge: '하나로 합치기',
+const LABEL = { up2: '고화질 2배', up4: '고화질 4배', up8: '고화질 8배', compress: '용량 줄이기', split: '쪽 나누기', merge: '하나로 합치기',
   rotr: '오른쪽으로 돌리기', rotl: '왼쪽으로 돌리기', unlock: '암호 풀기', protect: '암호 걸기' };
 const STRENGTH = { original: '원본', natural: '자연스럽게', strong: '강하게' };
-const UPSCALE = ['up2', 'up4'];
+const UPSCALE = ['up2', 'up4', 'up8'];
 const pdfPages = async (b) => (await PDFDocument.load(b)).getPageCount();
 const NEW_PASSWORD = '5678'; // '암호 걸기' 시험에서 거는 암호
 
@@ -167,7 +167,7 @@ async function checkProtected(buf) {
 // 용량 줄이기: 이 결과들은 원본보다 작아야 한다 (나머지는 원본이 이미 작아 원본을 그대로 줄 수도 있다)
 const SMALLER = ['pic_압축.png', '노래_압축.mp3', 'old_압축.mp4', '무음영상_압축.mp4'];
 
-// [입력 파일들, 변환 형식, 예상 결과 파일 이름, 예상 가로 크기, 동영상 코덱 강제, AI 세기(기본 'natural')]
+// [입력 파일들, 변환 형식, 예상 결과 파일 이름, 예상 가로 크기, 동영상 코덱 강제, AI 세기(기본 'natural'), AI 종류(기본 '사진')]
 const CASES = [
   [['영상.mp4'], 'mp3', '영상.mp3'],
   [['영상.mp4'], 'wav', '영상.wav'],
@@ -263,6 +263,8 @@ const CASES = [
   [['사진.jpg'], 'up2', '사진_고화질2배_강하게.jpg', 1600, null, 'strong'],
   [['작은영상.webm'], 'up4', '작은영상_고화질4배_강하게.mp4', null, 'vp9', 'strong'],
   [['사진.jpg'], 'up2', '사진_고화질2배_원본충실.jpg', 1600, null, 'original'],
+  [['pic.bmp'], 'up8', 'pic_고화질8배.png', 1600], // 8배: AI를 두 번 거친다
+  [['pic.bmp'], 'up2', 'pic_고화질2배_그림.png', 400, null, 'natural', '그림'], // 그림용 AI
   [['pic.bmp'], 'compress', 'pic_압축.png'], // 색이 적은 그림 → 256색 PNG
   [['사진.jpg'], 'compress', '사진_압축.jpg'],
   [['투명.png'], 'compress', '투명_압축.png'], // 투명한 곳 유지
@@ -295,8 +297,8 @@ await page.goto(url);
 await page.waitForFunction(() => self.crossOriginIsolated, null, { timeout: 30000 });
 
 let failed = 0;
-for (const [inputs, target, expected, width, codec, strength = 'natural'] of CASES) {
-  const label = `${inputs.join(' + ')} → ${LABEL[target] || target.toUpperCase()}${strength !== 'natural' ? ` ${STRENGTH[strength]}` : ''}${codec ? ` (${codec})` : ''}`;
+for (const [inputs, target, expected, width, codec, strength = 'natural', kind = '사진'] of CASES) {
+  const label = `${inputs.join(' + ')} → ${LABEL[target] || target.toUpperCase()}${strength !== 'natural' ? ` ${STRENGTH[strength]}` : ''}${kind !== '사진' ? ` ${kind}` : ''}${codec ? ` (${codec})` : ''}`;
   if (only && !only.test(label)) continue;
   const started = Date.now();
   try {
@@ -307,6 +309,7 @@ for (const [inputs, target, expected, width, codec, strength = 'natural'] of CAS
     })));
     await page.getByRole('button', LABEL[target] ? { name: LABEL[target], exact: !UPSCALE.includes(target) } : { name: target.toUpperCase(), exact: true }).click();
     if (UPSCALE.includes(target)) await page.getByRole('button', { name: STRENGTH[strength], exact: true }).click();
+    if (UPSCALE.includes(target) && !/\.(mp4|webm|mov|avi)$/.test(inputs[0])) await page.getByRole('button', { name: kind, exact: true }).click();
     if (expected === null) {
       await page.click('#go');
       await page.waitForSelector('#msg.err', { timeout: 600000 });
@@ -378,6 +381,16 @@ for (const [inputs, target, expected, width, codec, strength = 'natural'] of CAS
     // MP4 결과는 어디서나 재생되는 코덱(H.264, 아이폰 영상은 HEVC)이어야 한다 (VP9 시험은 제외)
     if (ext === 'mp4' && codec !== 'vp9' && !/avc1|hvc1/.test(buf.subarray(0, 1 << 20).toString('latin1'))) {
       throw new Error(`${name}이(가) 재생 호환 코덱(H.264)이 아님`);
+    }
+    // 사진 화질 개선: 원본과 결과를 비교하는 화면이 떠야 한다 (두 그림 모두 실제로 그려지는지)
+    if (UPSCALE.includes(target) && ext !== 'mp4') {
+      const sizes = await page.evaluate(async () => {
+        const imgs = [...document.querySelectorAll('#preview .compare img')];
+        await Promise.all(imgs.map((i) => i.decode().catch(() => {})));
+        return imgs.map((i) => i.naturalWidth);
+      });
+      if (sizes.length !== 2 || sizes.some((w) => !w)) throw new Error(`비교 화면이 없음 (${sizes})`);
+      if (width && sizes[1] !== width) throw new Error(`비교 화면의 결과 가로 크기가 ${sizes[1]} (기대: ${width})`);
     }
     const msg = await page.textContent('#msg');
     if (!msg.startsWith('완료')) throw new Error(`메시지: ${msg}`);

@@ -15,7 +15,7 @@ export const CATEGORIES = [
   {
     id: 'image', name: '이미지', engine: 'image',
     exts: ['jpg', 'jpeg', 'jfif', 'jpe', 'png', 'webp', 'heic', 'heif', 'avif', 'bmp', 'gif', 'tif', 'tiff', 'svg', 'ico'],
-    targets: ['jpg', 'png', 'webp', 'pdf', 'gif', 'bmp', 'tiff', 'ico', 'up2', 'up4', 'compress', 'rotr', 'rotl'],
+    targets: ['jpg', 'png', 'webp', 'pdf', 'gif', 'bmp', 'tiff', 'ico', 'up2', 'up4', 'up8', 'compress', 'rotr', 'rotl'],
   },
   {
     id: 'word', name: 'Word 문서', engine: 'office',
@@ -44,8 +44,8 @@ export const CATEGORIES = [
   },
 ];
 
-/** AI 화질 개선(업스케일) 선택지: 배율 */
-export const UPSCALE = { up2: 2, up4: 4 };
+/** AI 화질 개선(업스케일) 선택지: 배율 (8배는 사진만: AI를 두 번 거친다) */
+export const UPSCALE = { up2: 2, up4: 4, up8: 8 };
 
 /** 도구: 형식은 그대로 두고 손보는 것 */
 export const TOOLS = {
@@ -62,7 +62,7 @@ const SAME = { jpeg: 'jpg', jfif: 'jpg', jpe: 'jpg', tif: 'tiff', heif: 'heic', 
 // 이 형식에는 맞지 않는 선택지 (SVG는 원래 선명한 그림이라 AI 화질 개선이 필요 없다.
 // 움직이는 GIF·아이콘(ICO)은 사진처럼 다시 저장하면 움직임·여러 크기가 사라진다)
 const PHOTO_TOOLS = ['compress', 'rotr', 'rotl'];
-const NOT_FOR = { svg: ['up2', 'up4', ...PHOTO_TOOLS], gif: PHOTO_TOOLS, ico: PHOTO_TOOLS };
+const NOT_FOR = { svg: ['up2', 'up4', 'up8', ...PHOTO_TOOLS], gif: PHOTO_TOOLS, ico: PHOTO_TOOLS };
 // 이 형식에만 더 있는 선택지 (움직이는 GIF → 동영상)
 const EXTRA_FOR = { gif: ['mp4'] };
 
