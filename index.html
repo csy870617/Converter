@@ -56,7 +56,14 @@
       <h2>어떻게 바꿀까요?</h2>
       <div id="targets"></div>
       <p id="targetHint" class="hint">파일을 넣으면 바꿀 수 있는 형식이 여기에 나타나요.</p>
-      <div class="strength hidden" id="strengthRow" role="group" aria-label="화질 개선 세기">
+      <div class="opt-row hidden" id="kindRow" role="group" aria-label="사진 종류">
+        <span>종류</span>
+        <div class="seg">
+          <button type="button" data-kind="photo">사진</button>
+          <button type="button" data-kind="art">그림</button>
+        </div>
+      </div>
+      <div class="opt-row hidden" id="strengthRow" role="group" aria-label="화질 개선 세기">
         <span>세기</span>
         <div class="seg">
           <button type="button" data-strength="original">원본</button>
@@ -75,6 +82,7 @@
       <button id="go" disabled>변환하기</button>
       <div class="bar" id="bar"><div></div></div>
       <div id="msg" aria-live="polite"></div>
+      <div id="preview"></div>
     </div>
   </section>
 

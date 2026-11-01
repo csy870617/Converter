@@ -1,14 +1,20 @@
 // AI 화질 개선(업스케일). ONNX Runtime Web으로 브라우저 안에서 돌린다.
 // 그래픽카드(WebGPU)를 쓸 수 있으면 빠르게, 없으면 CPU로 천천히 계산한다.
 //
-// 모델 = Real-ESRGAN(wdn-x4v3) + 충실도 보정.
+// 모델 = Real-ESRGAN + 충실도 보정. 사진용(wdn-x4v3, 기본)과 그림용(x4plus_anime_6B) 두 가지.
 // AI가 키운 결과를 원래 크기로 다시 줄였을 때 원본과 같아지도록 3번 되돌려 고친다(역투영).
 // 그래서 AI가 없는 무늬를 지어내거나 얼굴·글자·색을 바꾸는 왜곡이 크게 줄어든다.
 // 모델을 고른 근거와 측정 결과는 scripts/model/README.md 참고.
 import { ConvertError, extOf, stemOf } from './formats.js';
 import { MAX_PIXELS, asset, bigAsset, canvasBlob, decodeImage, loadFFmpegThreaded, makeCanvas, out, pickCodec } from './engines.js';
 
-const MODEL = { file: 'models/fidelity-x4.onnx', half: 'models/fidelity-x4-fp16.onnx', size: '5MB' };
+// 그림용은 선이 또렷한 그림(만화·애니·로고·도표)의 윤곽을 훨씬 또렷하게 살린다. 사진·붓 그림은 사진용이 낫다.
+// 그림용은 4배 크기에서 계산하는 층이 있어 메모리를 많이 쓰므로 조각을 작게 나눈다.
+//  gpuTile·cpuTile: 한 번에 계산하는 조각 크기(입력 화소), whole: 그래픽카드에서 조각내지 않고 한 번에 계산하는 크기
+const MODELS = {
+  photo: { file: 'models/fidelity-x4.onnx', half: 'models/fidelity-x4-fp16.onnx', gpuTile: 512, whole: 400_000, cpuTile: 128 },
+  art: { file: 'models/fidelity-anime-x4.onnx', half: 'models/fidelity-anime-x4-fp16.onnx', gpuTile: 192, whole: 192 * 192, cpuTile: 96 },
+};
 // 원본과 얼마나 엄격하게 맞출지. 무손실 원본(PNG 등)은 그대로 맞추고, 손실 압축 원본(JPEG·동영상)은
 // 압축 흔적·잡음까지 되살리지 않도록 작은 차이는 무시하고 큰 차이(모양·색 왜곡)만 고친다.
 const STRICT = { core: 0, soft: 0 };
@@ -24,15 +30,14 @@ const fidelityFor = (lossless, strength) => ({
   ...(lossless || strength === 'original' ? STRICT : LOSSY), sharp: strength === 'strong' ? STRONG : 0,
 });
 const SUFFIX = { original: '_원본충실', strong: '_강하게' };
-const suffix = (scale, strength) => `_고화질${scale}배${SUFFIX[strength] || ''}`;
+const suffix = (scale, strength, kind) => `_고화질${scale}배${kind === 'art' ? '_그림' : ''}${SUFFIX[strength] || ''}`;
 const PAD = 16; // 타일 경계가 티 나지 않도록 주변을 겹쳐서 계산한다
-const WHOLE = 400_000; // 그래픽카드에서는 이 화소 수까지 한 번에 계산한다 (조각내면 느려진다)
 // 그래픽카드 안에서 그림으로 바꾸는 방식은 4배 결과 전체를 한 번에 담으므로 이 크기까지만 쓴다
 // (1080p 영상의 4배 = 약 3,300만 화소). 더 크면 조각마다 가져온다.
 const PAINT_MAX = 36_000_000;
 
 let ortPromise = null;
-let enginePromise = null;
+const engines = new Map(); // 모델 종류 → 준비된 엔진 (Promise)
 
 function loadOrt() {
   ortPromise ??= (async () => {
@@ -65,36 +70,39 @@ async function fetchModel(file, status) {
   return new Uint8Array(await new Blob(chunks).arrayBuffer());
 }
 
-function loadEngine(status) {
-  enginePromise ??= (async () => {
+function loadEngine(status, kind = 'photo') {
+  const model = MODELS[kind];
+  if (engines.has(kind)) return engines.get(kind);
+  const promise = (async () => {
     status('AI 준비 중…');
     const ort = await loadOrt();
     let adapter = null;
     try { adapter = await navigator.gpu?.requestAdapter(); } catch { /* 그래픽카드 가속 없음 */ }
     if (adapter) {
       // 반정밀도(fp16)를 지원하는 그래픽카드는 2배 가까이 빠르다. 결과 차이는 눈으로 구분되지 않는다(평균 0.1/255).
-      const files = adapter.features.has('shader-f16') ? [MODEL.half, MODEL.file] : [MODEL.file];
+      const files = adapter.features.has('shader-f16') ? [model.half, model.file] : [model.file];
       for (const file of files) {
         try {
           // 결과를 그래픽카드 메모리에 둔 채 받는다 (그래픽카드에서 바로 그림으로 바꾼 뒤 가져온다)
           const session = await ort.InferenceSession.create(await fetchModel(file, status),
             { executionProviders: ['webgpu'], preferredOutputLocation: 'gpu-buffer' });
           const device = await ort.env.webgpu.device;
-          return { ort, session, gpu: true, device, painter: device ? new GpuPainter(device) : null };
+          return { ort, session, model, gpu: true, device, painter: device ? new GpuPainter(device) : null };
         } catch (e) {
           console.warn(`WebGPU로 ${file}을(를) 쓸 수 없습니다`, e);
         }
       }
     }
-    const session = await ort.InferenceSession.create(await fetchModel(MODEL.file, status), { executionProviders: ['wasm'] });
-    return { ort, session, gpu: false };
+    const session = await ort.InferenceSession.create(await fetchModel(model.file, status), { executionProviders: ['wasm'] });
+    return { ort, session, model, gpu: false };
   })().catch((e) => {
-    enginePromise = null;
+    engines.delete(kind);
     if (e instanceof ConvertError) throw e;
     console.error(e);
     throw new ConvertError('AI를 준비하지 못했습니다. 인터넷 연결을 확인하고 페이지를 새로고침해 주세요.');
   });
-  return enginePromise;
+  engines.set(kind, promise);
+  return promise;
 }
 
 /**
@@ -203,8 +211,8 @@ class GpuPainter {
  * 메모리를 아끼려고 조각(타일)마다 계산한다. result 캔버스를 주면 그 위에 그린다.
  */
 async function enhance({ data, width: W, height: H, channels }, outW, outH, engine, fidelity, onTile, result = null) {
-  const { ort, session, gpu, painter } = engine;
-  const tile = gpu ? (W * H <= WHOLE ? Math.max(W, H) : 512) : 128;
+  const { ort, session, gpu, painter, model } = engine;
+  const tile = gpu ? (W * H <= model.whole ? Math.max(W, H) : model.gpuTile) : model.cpuTile;
   if (!result) result = makeCanvas(outW, outH);
   const rctx = result.getContext('2d');
   rctx.imageSmoothingQuality = 'high';
@@ -300,14 +308,15 @@ function timeLeft(started, done, total) {
 }
 
 const nextFrame = () => new Promise((r) => setTimeout(r, 0)); // 화면이 멈추지 않게 잠깐 양보
+const SHOWABLE = ['jpg', 'jpeg', 'jfif', 'jpe', 'png', 'webp', 'gif', 'bmp', 'avif'];
 
 // ---------------------------------------------------------------------------
 // 사진
 // ---------------------------------------------------------------------------
 
-export async function upscaleImage(file, scale, { status, progress, strength }) {
+export async function upscaleImage(file, scale, { status, progress, strength, kind = 'photo' }) {
   const bitmap = await decodeImage(file);
-  const engine = await loadEngine(status);
+  const engine = await loadEngine(status, kind);
   // 아주 큰 사진은 이 브라우저가 다룰 수 있는 크기로 줄여서 읽는다 (아이폰 사파리는 약 1,670만 화소까지)
   const srcCanvas = makeCanvas(bitmap.width, bitmap.height);
   const W = srcCanvas.width;
@@ -324,14 +333,38 @@ export async function upscaleImage(file, scale, { status, progress, strength }) 
   const ext = extOf(file.name);
   const fidelity = fidelityFor(LOSSLESS.includes(ext), strength);
 
+  // 4배보다 크게 키울 때는 AI를 두 번 거친다: k/4배로 키운 중간 결과를 다시 4배로.
+  // 한 번 4배 한 뒤 단순히 늘리는 것보다 훨씬 또렷하다 (측정 결과는 scripts/model/README.md).
+  const steps = k > 4 ? [k / 4, k] : [k];
+  const cost = steps.map((s, i) => (i ? steps[i - 1] ** 2 : 1)); // 계산량은 입력 화소 수에 비례
+  const total = cost.reduce((a, b) => a + b, 0);
   const how = engine.gpu ? '' : ' · 느린 모드(CPU)';
-  status(`화질 높이는 중… ${W}×${H} → ${w}×${h}${how}`);
   const started = Date.now();
-  const canvas = await enhance({ data: pixels, width: W, height: H, channels: 4 }, w, h, engine, fidelity, async (i, n) => {
-    status(`화질 높이는 중… ${w}×${h}${how}${timeLeft(started, i, n)}`);
-    progress(i / n);
-    await nextFrame();
-  }, result);
+  let input = { data: pixels, width: W, height: H, channels: 4 };
+  let canvas;
+  let doneCost = 0;
+  for (const [i, s] of steps.entries()) {
+    const last = i === steps.length - 1;
+    const tw = last ? w : Math.round(W * s);
+    const th = last ? h : Math.round(H * s);
+    // 두 번째는 AI가 만든 깨끗한 중간 결과가 입력이라 그대로 맞춘다. 윤곽 강조는 마지막에 한 번만.
+    const fid = i === 0 ? { ...fidelity, sharp: last ? fidelity.sharp : 0 } : { ...STRICT, sharp: fidelity.sharp };
+    const stage = steps.length > 1 ? ` (${i + 1}/${steps.length}단계)` : '';
+    status(`화질 높이는 중… ${input.width}×${input.height} → ${tw}×${th}${stage}${how}`);
+    canvas = await enhance(input, tw, th, engine, fid, async (t, n) => {
+      const p = (doneCost + (cost[i] * t) / n) / total;
+      status(`화질 높이는 중… ${tw}×${th}${stage}${how}${timeLeft(started, p * 1000, 1000)}`);
+      progress(p);
+      await nextFrame();
+    }, last ? result : null);
+    doneCost += cost[i];
+    if (!last) {
+      const mw = canvas.width; // 이 브라우저가 그만큼 큰 캔버스를 못 쓰면 줄어들 수 있다
+      const mh = canvas.height;
+      input = { data: canvas.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, mw, mh).data, width: mw, height: mh, channels: 4 };
+      canvas.width = 0; // 메모리를 바로 돌려준다
+    }
+  }
 
   // 투명한 부분이 있으면 원본의 투명도를 그대로 살린다
   let transparent = false;
@@ -347,13 +380,18 @@ export async function upscaleImage(file, scale, { status, progress, strength }) 
     rctx.putImageData(full, 0, 0);
   }
 
-  const name = `${stemOf(file.name)}${suffix(scale, strength)}`;
-  if (ext === 'jpg' || ext === 'jpeg') return [out(name, 'jpg', await canvasBlob(canvas, 'image/jpeg', 0.95))];
-  if (ext === 'webp') {
+  const name = `${stemOf(file.name)}${suffix(scale, strength, kind)}`;
+  let res = null;
+  if (ext === 'jpg' || ext === 'jpeg') res = out(name, 'jpg', await canvasBlob(canvas, 'image/jpeg', 0.95));
+  else if (ext === 'webp') {
     const blob = await canvasBlob(canvas, 'image/webp', 0.95);
-    if (blob.type === 'image/webp') return [out(name, 'webp', blob)];
+    if (blob.type === 'image/webp') res = out(name, 'webp', blob);
   }
-  return [out(name, 'png', await canvasBlob(canvas, 'image/png'))];
+  res ??= out(name, 'png', await canvasBlob(canvas, 'image/png'));
+  // 전후 비교 화면에 쓸 원본: 브라우저가 바로 보여 주는 형식은 그대로, 아니면(HEIC·TIFF) PNG로
+  const before = SHOWABLE.includes(ext) ? file : await canvasBlob(srcCanvas, 'image/png');
+  res.compare = { before, from: [W, H], to: [w, h] };
+  return [res];
 }
 
 // ---------------------------------------------------------------------------
